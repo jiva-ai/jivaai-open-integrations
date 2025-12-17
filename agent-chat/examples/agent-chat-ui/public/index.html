@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Jiva.ai Agent Chat</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;700&family=Roboto:wght@400;500;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <div class="header-left">
+                <img src="logo.png" alt="Jiva.ai Logo" class="logo" id="logoImg" onerror="this.style.display='none'">
+                <h1>Jiva.ai Agent Chat</h1>
+            </div>
+            <button id="settingsBtn" class="btn-secondary">Settings</button>
+        </header>
+
+        <div class="main-content">
+            <div class="debug-panel" id="debugPanel">
+                <div class="debug-header">
+                    <h3>Debug Log</h3>
+                    <button id="toggleDebugBtn" class="toggle-btn" title="Toggle Debug Panel">◀</button>
+                    <button id="clearDebugBtn" class="btn-clear" title="Clear Log">Clear</button>
+                </div>
+                <div id="debugLog" class="debug-log"></div>
+            </div>
+            <div class="chat-container">
+                <div id="messages" class="messages"></div>
+                <div class="input-container">
+                    <textarea 
+                        id="messageInput" 
+                        placeholder="Type your message here..." 
+                        rows="3"
+                    ></textarea>
+                    <button id="sendBtn" class="btn-primary">Send</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Settings Modal -->
+    <div id="settingsModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>Settings</h2>
+                <button id="closeSettingsBtn" class="close-btn">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="settings-section">
+                    <h3>Base Configuration</h3>
+                    <div class="form-group">
+                        <label>Base URL (used for all endpoints):</label>
+                        <input type="text" id="baseUrl" placeholder="https://api.jiva.ai/public-api/workflow" value="https://api.jiva.ai/public-api/workflow">
+                        <small class="form-hint">Example: https://api.jiva.ai/public-api/workflow</small>
+                    </div>
+                    <div class="form-group">
+                        <label>Socket Base URL:</label>
+                        <input type="text" id="socketBaseUrl" placeholder="https://platform.jiva.ai/api" value="https://platform.jiva.ai/api">
+                    </div>
+                </div>
+
+                <div class="endpoint-box">
+                    <h3>Chat Endpoint</h3>
+                    <div class="form-group">
+                        <label>Workflow ID:</label>
+                        <input type="text" id="chatWorkflowId" placeholder="your-workflow-id">
+                    </div>
+                    <div class="form-group">
+                        <label>Version:</label>
+                        <input type="text" id="chatWorkflowVersion" placeholder="0" value="0">
+                    </div>
+                    <div class="form-group">
+                        <label>API Key:</label>
+                        <input type="password" id="chatApiKey" placeholder="your-api-key">
+                    </div>
+                </div>
+
+                <div class="endpoint-box">
+                    <h3>File Upload Cache</h3>
+                    <div class="form-group">
+                        <label>Workflow ID:</label>
+                        <input type="text" id="fileUploadCacheWorkflowId" placeholder="file-cache-workflow-id">
+                    </div>
+                    <div class="form-group">
+                        <label>Version:</label>
+                        <input type="text" id="fileUploadCacheVersion" placeholder="0" value="0">
+                    </div>
+                    <div class="form-group">
+                        <label>API Key:</label>
+                        <input type="password" id="fileUploadCacheApiKey" placeholder="(optional, uses chat API key if empty)">
+                    </div>
+                </div>
+
+                <div class="endpoint-box">
+                    <h3>Text Upload Cache</h3>
+                    <div class="form-group">
+                        <label>Workflow ID:</label>
+                        <input type="text" id="textUploadCacheWorkflowId" placeholder="text-cache-workflow-id">
+                    </div>
+                    <div class="form-group">
+                        <label>Version:</label>
+                        <input type="text" id="textUploadCacheVersion" placeholder="0" value="0">
+                    </div>
+                    <div class="form-group">
+                        <label>API Key:</label>
+                        <input type="password" id="textUploadCacheApiKey" placeholder="(optional, uses chat API key if empty)">
+                    </div>
+                </div>
+
+                <div class="endpoint-box">
+                    <h3>Table Upload Cache</h3>
+                    <div class="form-group">
+                        <label>Workflow ID:</label>
+                        <input type="text" id="tableUploadCacheWorkflowId" placeholder="table-cache-workflow-id">
+                    </div>
+                    <div class="form-group">
+                        <label>Version:</label>
+                        <input type="text" id="tableUploadCacheVersion" placeholder="0" value="0">
+                    </div>
+                    <div class="form-group">
+                        <label>API Key:</label>
+                        <input type="password" id="tableUploadCacheApiKey" placeholder="(optional, uses chat API key if empty)">
+                    </div>
+                </div>
+
+                <div class="modal-footer">
+                    <button id="saveSettingsBtn" class="btn-primary">Save Settings</button>
+                    <button id="cancelSettingsBtn" class="btn-secondary">Cancel</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script type="module" src="app.js"></script>
+</body>
+</html>
+
