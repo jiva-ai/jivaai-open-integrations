@@ -791,3 +791,10 @@ All TypeScript types are exported from the main entry point. Key types include:
 - `Logger` - Custom logger interface
 
 See `src/types.ts` for complete type definitions.
+
+# Installing on npm
+
+```
+npm login
+npm publish
+```
