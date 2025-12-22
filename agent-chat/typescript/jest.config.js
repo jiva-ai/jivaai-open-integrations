@@ -11,6 +11,10 @@ module.exports = {
     '!src/**/*.spec.ts'
   ],
   coverageDirectory: 'coverage',
-  verbose: true
+  verbose: true,
+  // Pass through environment variables to test processes
+  testEnvironmentOptions: {
+    // This ensures environment variables are available
+  }
 };
 

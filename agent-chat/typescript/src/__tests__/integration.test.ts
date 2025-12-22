@@ -3,59 +3,67 @@
  * 
  * These tests make real API calls to a local Jiva.ai instance.
  * 
+ * IMPORTANT: These tests are SKIPPED BY DEFAULT.
+ * 
  * To run these tests:
  * 1. Ensure the local Jiva.ai instance is running
- * 2. Remove .skip from describe or use: npm test -- integration.test.ts
+ * 2. Set RUN_INTEGRATION_TESTS=true in the same command line:
+ *    RUN_INTEGRATION_TESTS=true npm test -- integration.test.ts
  * 
- * To skip these tests:
- * - Use: npm test -- --testPathIgnorePatterns=integration.test.ts
- * - Or set SKIP_INTEGRATION_TESTS=true
- * - Or keep .skip on the describe block
- * 
- * NOTE: The workflow IDs in the URLs include "/0/invoke" but our implementation
- * uses just the workflow ID. You may need to adjust the workflow IDs if the
- * actual endpoint structure differs.
+ * Configuration:
+ * - All workflow IDs and API keys are configured below
+ * - Base URL: https://local.jiva.ai:8445/public-api/workflow
+ * - Socket Base URL: https://local.jiva.ai:8445/api
+ * - All workflows use version "0"
  */
+
+/// <reference types="node" />
 
 import { JivaApiClient } from '../api';
 import { ApiConfig } from '../types';
 
-// Skip integration tests if SKIP_INTEGRATION_TESTS is set
-const skipIntegrationTests = process.env.SKIP_INTEGRATION_TESTS === 'true';
+// Integration tests are skipped by default
+// Set RUN_INTEGRATION_TESTS=true to enable them
+// IMPORTANT: Environment variable must be set in the same command line:
+//   RUN_INTEGRATION_TESTS=true npm test -- integration.test.ts
+const runIntegrationTests = 
+  process.env.RUN_INTEGRATION_TESTS === 'true' || 
+  String(process.env.RUN_INTEGRATION_TESTS || '').toLowerCase() === 'true';
 
 // Local test configuration
 const localConfig: ApiConfig = {
   apiKey: 'EdD5F92kCp8=',
   workflowId: '6941973e746ffc2695a4a5a1',
-  workflowVersion: '0', // Version from .../0/invoke
+  workflowVersion: '0',
   fileUploadCacheWorkflowId: '6941973d746ffc2695a49b32',
   fileUploadCacheVersion: '0',
   fileUploadCacheApiKey: 'ag58iew4ALw=',
   textUploadCacheWorkflowId: '6941973e746ffc2695a49eb0',
   textUploadCacheVersion: '0',
   textUploadCacheApiKey: 'EP0fbtmcTgc=',
-  tableUploadCacheWorkflowId: '6941973e746ffc2695a49eb0', // Using text cache for table as well
+  tableUploadCacheWorkflowId: '6941973e746ffc2695a4a223',
   tableUploadCacheVersion: '0',
-  tableUploadCacheApiKey: 'EP0fbtmcTgc=',
+  tableUploadCacheApiKey: 'cRqo0rGkoYI=',
   baseUrl: 'https://local.jiva.ai:8445/public-api/workflow',
-  socketBaseUrl: 'https://local.jiva.ai:8445/api',
+  logging: {
+    level: 'warn',
+  },
 };
 
-describe.skip('Integration Tests (Real API)', () => {
-  // Use .skip to disable by default, or conditionally skip
-  const client = new JivaApiClient(localConfig);
+// Integration tests are skipped by default - only run when RUN_INTEGRATION_TESTS=true
+if (runIntegrationTests) {
+  describe('Integration Tests (Real API)', () => {
+    const client = new JivaApiClient(localConfig);
 
-  beforeAll(() => {
-    if (skipIntegrationTests) {
-      console.log('Skipping integration tests (SKIP_INTEGRATION_TESTS=true)');
-    }
-  });
+    beforeAll(() => {
+      // Integration tests are running
+    });
 
-  describe('Real API conversation flow with WebSocket', () => {
+    describe('Real API conversation flow with WebSocket', () => {
     it(
       'should complete full flow with real API and WebSocket updates',
       async () => {
-        if (skipIntegrationTests) {
+        if (!runIntegrationTests) {
           return;
         }
 
@@ -102,6 +110,7 @@ describe.skip('Integration Tests (Real API)', () => {
             mode: 'CHAT_REQUEST',
           });
 
+          console.log('Initial response:', initialResponse);
           console.log('Initial response state:', initialResponse.data?.json.default.state);
           console.log('Initial response mode:', initialResponse.data?.json.default.mode);
 
@@ -197,13 +206,13 @@ describe.skip('Integration Tests (Real API)', () => {
       },
       60000 // 60 second timeout
     );
-  });
+    });
 
-  describe('Real API - Simple conversation', () => {
+    describe('Real API - Simple conversation', () => {
     it(
       'should make a simple conversation request',
       async () => {
-        if (skipIntegrationTests) {
+        if (!runIntegrationTests) {
           return;
         }
 
@@ -225,13 +234,13 @@ describe.skip('Integration Tests (Real API)', () => {
       },
       30000 // 30 second timeout
     );
-  });
+    });
 
-  describe('Real API - Upload tests', () => {
+    describe('Real API - Upload tests', () => {
     it(
       'should upload a file',
       async () => {
-        if (skipIntegrationTests) {
+        if (!runIntegrationTests) {
           return;
         }
 
@@ -250,7 +259,7 @@ describe.skip('Integration Tests (Real API)', () => {
     it(
       'should upload text',
       async () => {
-        if (skipIntegrationTests) {
+        if (!runIntegrationTests) {
           return;
         }
 
@@ -264,9 +273,18 @@ describe.skip('Integration Tests (Real API)', () => {
       },
       30000
     );
+    });
+  }); // Close the describe block
+} else {
+  // Tests are skipped by default
+  describe.skip('Integration Tests (Real API)', () => {
+    it('should be skipped when RUN_INTEGRATION_TESTS is not set', () => {
+      // This test is skipped by default
+      // Set RUN_INTEGRATION_TESTS=true to run integration tests
+    });
   });
-});
+}
 
 // Alternative: Use describe.only to run only integration tests
-// Or use a separate test command: npm test -- integration.test.ts
+// Or use a separate test command: RUN_INTEGRATION_TESTS=true npm test -- integration.test.ts
 

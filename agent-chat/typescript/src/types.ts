@@ -29,8 +29,37 @@ export interface ApiConfig {
   tableUploadCacheApiKey?: string;
   /** Base URL for the API (defaults to production URL) */
   baseUrl?: string;
-  /** Base URL for WebSocket connections (defaults to platform base URL) */
+  /** Base URL for socket connections (defaults to baseUrl without /workflow, or production socket URL) */
   socketBaseUrl?: string;
+  /** Logging configuration */
+  logging?: LoggingConfig;
+}
+
+/**
+ * Log levels in order of severity (lowest to highest)
+ */
+export type LogLevel = 'debug' | 'info' | 'warn' | 'error' | 'silent';
+
+/**
+ * Logging configuration
+ */
+export interface LoggingConfig {
+  /** Minimum log level to output (defaults to 'warn' in production, 'debug' in development) */
+  level?: LogLevel;
+  /** Custom logger function (defaults to console methods) */
+  logger?: Logger;
+  /** Enable/disable logging entirely (defaults to true) */
+  enabled?: boolean;
+}
+
+/**
+ * Logger interface for custom logging implementations
+ */
+export interface Logger {
+  debug(message: string, ...args: unknown[]): void;
+  info(message: string, ...args: unknown[]): void;
+  warn(message: string, ...args: unknown[]): void;
+  error(message: string, ...args: unknown[]): void;
 }
 
 export interface ApiResponse<T = unknown> {

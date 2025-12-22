@@ -25,10 +25,20 @@ describe('End-to-End Flow', () => {
     textUploadCacheApiKey: 'text-cache-api-key',
     tableUploadCacheWorkflowId: 'table-cache-workflow-id',
     tableUploadCacheApiKey: 'table-cache-api-key',
+    logging: {
+      level: 'warn',
+    },
   };
 
   beforeEach(() => {
     jest.clearAllMocks();
+    // Ensure fetch is always mocked and reset
+    (global.fetch as jest.Mock).mockReset();
+    // Set a default mock that rejects to catch any unmocked calls
+    // This will be overridden by mockResolvedValueOnce/mockRejectedValueOnce in individual tests
+    (global.fetch as jest.Mock).mockRejectedValue(
+      new Error('Unmocked fetch call detected. All fetch calls must be mocked using mockResolvedValueOnce or mockRejectedValueOnce in tests.')
+    );
   });
 
   describe('Complete conversation flow with screen responses', () => {

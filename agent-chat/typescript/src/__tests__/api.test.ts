@@ -18,11 +18,20 @@ describe('JivaApiClient', () => {
     textUploadCacheApiKey: 'text-cache-api-key',
     tableUploadCacheWorkflowId: 'table-cache-workflow-id',
     tableUploadCacheApiKey: 'table-cache-api-key',
+    logging: {
+      level: 'warn',
+    },
   };
 
   beforeEach(() => {
     jest.clearAllMocks();
+    // Ensure fetch is always mocked and reset
     (global.fetch as jest.Mock).mockReset();
+    // Set a default mock that rejects to catch any unmocked calls
+    // This will be overridden by mockResolvedValueOnce/mockRejectedValueOnce in individual tests
+    (global.fetch as jest.Mock).mockRejectedValue(
+      new Error('Unmocked fetch call detected. All fetch calls must be mocked using mockResolvedValueOnce or mockRejectedValueOnce in tests.')
+    );
   });
 
   describe('constructor', () => {
@@ -1811,8 +1820,8 @@ describe('JivaApiClient', () => {
         });
         const body = JSON.parse(fetchCall[1].body);
         expect(body).toHaveProperty('base64FileBytes');
-        expect(body.base64FileBytes).toHaveProperty('file');
-        expect(typeof body.base64FileBytes.file).toBe('string');
+        expect(body.base64FileBytes).toHaveProperty('default');
+        expect(typeof body.base64FileBytes.default).toBe('string');
       });
 
       it('should upload a base64 string', async () => {
@@ -1837,7 +1846,7 @@ describe('JivaApiClient', () => {
         const body = JSON.parse(fetchCall[1].body);
         expect(body).toEqual({
           base64FileBytes: {
-            file: 'dGVzdCBjb250ZW50',
+            default: 'dGVzdCBjb250ZW50',
           },
         });
       });
@@ -1889,12 +1898,8 @@ describe('JivaApiClient', () => {
               'api-key': 'text-cache-api-key',
             }),
             body: JSON.stringify({
-              data: {
-                default: [
-                  {
-                    text: 'Sample text content',
-                  },
-                ],
+              strings: {
+                default: 'Sample text content',
               },
             }),
           })
@@ -1957,11 +1962,7 @@ describe('JivaApiClient', () => {
             }),
             body: JSON.stringify({
               data: {
-                default: [
-                  {
-                    table: tableData,
-                  },
-                ],
+                default: tableData,
               },
             }),
           })
@@ -1997,22 +1998,44 @@ describe('JivaApiClient', () => {
   });
 
   describe('subscribeToSocket', () => {
-    // Mock WebSocket for testing
-    class MockWebSocket {
+    // Mock EventSource for testing
+    class MockEventSource {
       url: string;
-      readyState: number = 0; // CONNECTING
+      static CONNECTING = 0;
+      static OPEN = 1;
+      static CLOSED = 2;
+      readyState: number = MockEventSource.CONNECTING; // CONNECTING = 0
       onopen: ((event: Event) => void) | null = null;
       onmessage: ((event: MessageEvent) => void) | null = null;
-      onclose: ((event: CloseEvent) => void) | null = null;
       onerror: ((event: Event) => void) | null = null;
+      private eventListeners: Map<string, Array<(event: MessageEvent) => void>> = new Map();
 
-      constructor(url: string) {
+      constructor(url: string, eventSourceInitDict?: EventSourceInit) {
         this.url = url;
         // Simulate connection - use setImmediate to ensure it happens after constructor
         // but allow tests to flush it
         const self = this;
         setImmediate(() => {
-          self.readyState = 1; // OPEN
+          self.readyState = MockEventSource.OPEN; // OPEN = 1
+          
+          // Spring backend sends a "connected" event first
+          // Simulate this by emitting the "connected" event
+          const connectedListeners = self.eventListeners.get('connected');
+          if (connectedListeners && connectedListeners.length > 0) {
+            // Create a minimal MessageEvent-like object for testing
+            const connectedEvent = {
+              type: 'connected',
+              data: `Connected to topic: ${url}`,
+              target: self,
+              lastEventId: '',
+              origin: '',
+              ports: [],
+              source: null,
+            } as unknown as MessageEvent;
+            connectedListeners.forEach(listener => listener(connectedEvent));
+          }
+          
+          // Also trigger onopen as fallback
           if (self.onopen) {
             // Create a mock Event object (Event is not available in Node.js)
             const openEvent = { type: 'open', target: self };
@@ -2021,65 +2044,71 @@ describe('JivaApiClient', () => {
         });
       }
 
-      close() {
-        this.readyState = 3; // CLOSED
-        if (this.onclose) {
-          // Create a mock CloseEvent object (CloseEvent is not available in Node.js)
-          // Call synchronously to ensure callback is triggered immediately
-          const closeEvent = {
-            code: 1000,
-            wasClean: true,
-            reason: '',
-            type: 'close',
-          };
-          // Call the callback synchronously
-          this.onclose(closeEvent as any);
+      addEventListener(type: string, listener: (event: MessageEvent) => void): void {
+        if (!this.eventListeners.has(type)) {
+          this.eventListeners.set(type, []);
+        }
+        this.eventListeners.get(type)!.push(listener);
+      }
+
+      removeEventListener(type: string, listener: (event: MessageEvent) => void): void {
+        const listeners = this.eventListeners.get(type);
+        if (listeners) {
+          const index = listeners.indexOf(listener);
+          if (index > -1) {
+            listeners.splice(index, 1);
+          }
         }
       }
 
-      send(data: string) {
-        // Mock send
+      close() {
+        this.readyState = MockEventSource.CLOSED; // CLOSED = 2
+        // EventSource triggers onerror when closed, which our implementation uses to call onClose
+        if (this.onerror) {
+          const errorEvent = { type: 'error', target: this };
+          this.onerror(errorEvent as any);
+        }
       }
     }
 
     beforeEach(() => {
-      // @ts-ignore - Mock WebSocket globally
-      global.WebSocket = MockWebSocket as any;
+      // @ts-ignore - Mock EventSource globally
+      global.EventSource = MockEventSource as any;
     });
 
     afterEach(() => {
       // @ts-ignore - Restore
-      delete (global as any).WebSocket;
+      delete (global as any).EventSource;
     });
 
-    it('should create WebSocket with correct URL', () => {
+    it('should create EventSource with correct URL', () => {
       const client = new JivaApiClient(mockConfig);
-      const ws = client.subscribeToSocket('session-123');
+      const es = client.subscribeToSocket('session-123');
 
-      expect(ws).toBeInstanceOf(MockWebSocket);
-      expect(ws.url).toBe('wss://platform.jiva.ai/api/workflow-chat/test-workflow-id/session-123');
+      expect(es).toBeInstanceOf(MockEventSource);
+      expect(es.url).toBe('https://api.jiva.ai/public-api/workflow-chat/test-workflow-id/session-123');
     });
 
-    it('should use custom socket base URL when provided', () => {
+    it('should use custom base URL when provided', () => {
       const customConfig = {
         ...mockConfig,
-        socketBaseUrl: 'https://test-platform.example.com/api',
+        baseUrl: 'https://test-platform.example.com/public-api/workflow',
       };
       const client = new JivaApiClient(customConfig);
-      const ws = client.subscribeToSocket('session-123');
+      const es = client.subscribeToSocket('session-123');
 
-      expect(ws.url).toBe('wss://test-platform.example.com/api/workflow-chat/test-workflow-id/session-123');
+      expect(es.url).toBe('https://test-platform.example.com/public-api/workflow-chat/test-workflow-id/session-123');
     });
 
-    it('should use ws:// for http:// base URLs', () => {
+    it('should use http:// for http:// base URLs', () => {
       const customConfig = {
         ...mockConfig,
-        socketBaseUrl: 'http://localhost:3000/api',
+        baseUrl: 'http://localhost:3000/public-api/workflow',
       };
       const client = new JivaApiClient(customConfig);
-      const ws = client.subscribeToSocket('session-123');
+      const es = client.subscribeToSocket('session-123');
 
-      expect(ws.url).toBe('ws://localhost:3000/api/workflow-chat/test-workflow-id/session-123');
+      expect(es.url).toBe('http://localhost:3000/public-api/workflow-chat/test-workflow-id/session-123');
     });
 
     it('should throw error if sessionId is missing', () => {
@@ -2089,26 +2118,80 @@ describe('JivaApiClient', () => {
       }).toThrow('sessionId is required');
     });
 
-    it('should call onOpen callback when socket connects', (done) => {
+    it('should call onOpen callback when EventSource connects (via "connected" event)', (done) => {
       const client = new JivaApiClient(mockConfig);
+      let testCompleted = false;
       const onOpen = jest.fn(() => {
+        if (testCompleted) {
+          return; // Prevent multiple calls
+        }
+        testCompleted = true;
         expect(onOpen).toHaveBeenCalled();
         done();
       });
 
-      const ws = client.subscribeToSocket('session-123', { onOpen });
-      
-      // Flush setImmediate to trigger the onopen callback
-      // The mock WebSocket constructor uses setImmediate, so we need to flush it
+      const es = client.subscribeToSocket('session-123', { onOpen });
+
+      // Flush setImmediate to trigger the "connected" event
+      // The mock EventSource constructor uses setImmediate and emits "connected" event
       setImmediate(() => {
         // If callback wasn't called yet, wait one more tick
         if (!onOpen.mock.calls.length) {
           setImmediate(() => {
-            // Should be called by now
+            // Should be called by now via "connected" event
+            if (!onOpen.mock.calls.length && !testCompleted) {
+              testCompleted = true;
+              done(new Error('onOpen was not called'));
+            }
           });
         }
       });
+
+      // Safety timeout
+      setTimeout(() => {
+        if (!testCompleted) {
+          testCompleted = true;
+          done(new Error('Test timed out waiting for onOpen'));
+        }
+      }, 5000);
     }, 10000); // Increase timeout for this test
+
+    it('should handle "connected" event from Spring backend', (done) => {
+      const client = new JivaApiClient(mockConfig);
+      let testCompleted = false;
+      const onOpen = jest.fn(() => {
+        if (testCompleted) {
+          return; // Prevent multiple calls
+        }
+        testCompleted = true;
+        expect(onOpen).toHaveBeenCalledTimes(1);
+        done();
+      });
+
+      const es = client.subscribeToSocket('session-123', { onOpen });
+
+      // The MockEventSource emits "connected" event in setImmediate
+      // This simulates Spring's SseEmitter.event().name("connected").data("Connected to topic: ...")
+      setImmediate(() => {
+        // onOpen should be called via the "connected" event listener
+        if (!onOpen.mock.calls.length) {
+          setImmediate(() => {
+            if (!onOpen.mock.calls.length && !testCompleted) {
+              testCompleted = true;
+              done(new Error('onOpen was not called via "connected" event'));
+            }
+          });
+        }
+      });
+
+      // Safety timeout
+      setTimeout(() => {
+        if (!testCompleted) {
+          testCompleted = true;
+          done(new Error('Test timed out waiting for onOpen'));
+        }
+      }, 5000);
+    }, 10000);
 
     it('should call onMessage callback when message is received', (done) => {
       const client = new JivaApiClient(mockConfig);
@@ -2119,42 +2202,63 @@ describe('JivaApiClient', () => {
         types: ['AGENT_THINKING'],
       };
 
+      let messageReceived = false;
       const onMessage = jest.fn((message) => {
+        if (messageReceived) {
+          return; // Prevent multiple calls
+        }
+        messageReceived = true;
         expect(message).toEqual(mockMessage);
         expect(onMessage).toHaveBeenCalledWith(mockMessage);
         done();
       });
 
-      const ws = client.subscribeToSocket('session-123', { onMessage });
-
-      // Flush setImmediate first to ensure socket is open, then simulate message
-      setImmediate(() => {
+      // Provide onOpen to ensure connection is established
+      const onOpen = jest.fn(() => {
+        // Once connection is open, wait a tick then send the message
         setImmediate(() => {
-          if (ws.onmessage) {
-            ws.onmessage({
+          if (es.onmessage) {
+            const messageEvent = {
               data: JSON.stringify(mockMessage),
-            } as MessageEvent);
+              type: 'message',
+              target: es,
+              lastEventId: '',
+              origin: '',
+              ports: [],
+              source: null,
+            } as unknown as MessageEvent;
+            es.onmessage(messageEvent);
+          } else {
+            done(new Error('onmessage handler not set'));
           }
         });
       });
+
+      const es = client.subscribeToSocket('session-123', { onOpen, onMessage });
+
+      // Set a timeout in case something goes wrong
+      setTimeout(() => {
+        if (!messageReceived) {
+          done(new Error('onMessage was not called within timeout'));
+        }
+      }, 5000);
     }, 10000); // Increase timeout for this test
 
-    it('should call onClose callback when socket closes', (done) => {
+    it('should call onClose callback when EventSource closes', (done) => {
       const client = new JivaApiClient(mockConfig);
       const onClose = jest.fn((event) => {
-        expect(event.code).toBe(1000);
-        expect(event.wasClean).toBe(true);
+        expect(event.code).toBe(0); // EventSource doesn't have close codes, uses 0
         expect(onClose).toHaveBeenCalled();
         done();
       });
 
-      const ws = client.subscribeToSocket('session-123', { onClose });
+      const es = client.subscribeToSocket('session-123', { onClose });
 
-      // Wait for socket to open, then close it
+      // Wait for EventSource to open, then close it
       setImmediate(() => {
-        // Socket should be open by now (readyState === 1)
-        // Close it - this should trigger onclose callback synchronously
-        ws.close();
+        // EventSource should be open by now (readyState === 1)
+        // Close it - this should trigger onerror with CLOSED state, which triggers onClose
+        es.close();
       });
     }, 10000); // Increase timeout for this test
 
@@ -2163,11 +2267,11 @@ describe('JivaApiClient', () => {
       const client = new JivaApiClient(mockConfig);
       const onMessage = jest.fn();
 
-      const ws = client.subscribeToSocket('session-123', { onMessage });
+      const es = client.subscribeToSocket('session-123', { onMessage });
 
       setTimeout(() => {
-        if (ws.onmessage) {
-          ws.onmessage({
+        if (es.onmessage) {
+          es.onmessage({
             data: 'invalid json',
           } as MessageEvent);
         }

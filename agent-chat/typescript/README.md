@@ -43,11 +43,20 @@ Run integration tests (requires local Jiva.ai instance):
 npm test -- integration.test.ts
 ```
 
-Skip integration tests:
+Run integration tests (they are skipped by default):
 
 ```bash
-SKIP_INTEGRATION_TESTS=true npm test
+# On Unix/Linux/Mac:
+RUN_INTEGRATION_TESTS=true npm test -- integration.test.ts
+
+# On Windows (PowerShell):
+$env:RUN_INTEGRATION_TESTS="true"; npm test -- integration.test.ts
+
+# On Windows (CMD):
+set RUN_INTEGRATION_TESTS=true && npm test -- integration.test.ts
 ```
+
+**Note**: Integration tests are skipped by default and require a running local Jiva.ai instance. They will only run when `RUN_INTEGRATION_TESTS=true` is explicitly set.
 
 ### Lint
 
@@ -79,7 +88,12 @@ const client = new JivaApiClient({
   tableUploadCacheVersion: '0', // Optional: Table Upload Cache version (defaults to workflowVersion or "0")
   tableUploadCacheApiKey: 'table-cache-api-key', // Optional: Table Upload Cache API key (defaults to apiKey)
   baseUrl: 'https://api.jiva.ai/public-api/workflow', // Optional: API base URL
-  socketBaseUrl: 'https://platform.jiva.ai/api', // Optional: WebSocket base URL
+  socketBaseUrl: 'https://platform.jiva.ai/api', // Optional: EventSource (SSE) base URL
+  logging: {
+    // Optional: Logging configuration
+    level: 'info', // 'debug' | 'info' | 'warn' | 'error' | 'silent' (default: 'warn' in production, 'debug' in development)
+    enabled: true, // Enable/disable logging (default: true)
+  },
 });
 
 // Make a POST request
@@ -113,6 +127,79 @@ const testClient = new JivaApiClient({
   apiKey: 'test-api-key',
   workflowId: 'test-workflow-id',
   baseUrl: 'https://test-api.example.com/workflow',
+});
+```
+
+### Logging
+
+The SDK includes built-in logging with different log levels. By default, logging is enabled and uses:
+- **Production**: `warn` level (warnings and errors only)
+- **Development**: `debug` level (all messages)
+
+You can configure logging in the client initialization:
+
+```typescript
+const client = new JivaApiClient({
+  apiKey: 'your-api-key',
+  workflowId: 'your-workflow-id',
+  // ... other config ...
+  logging: {
+    level: 'debug', // 'debug' | 'info' | 'warn' | 'error' | 'silent'
+    enabled: true,  // Enable/disable logging
+  },
+});
+```
+
+**Log Levels:**
+- `debug`: Detailed information (URLs, payloads, responses) - most verbose
+- `info`: General flow information (method calls, state changes)
+- `warn`: Warnings (retries, fallbacks, timeouts)
+- `error`: Errors (API errors, network errors)
+- `silent`: No logging output
+
+**Using a Custom Logger:**
+
+You can provide your own logger implementation:
+
+```typescript
+import { Logger } from '@jivaai/agent-chat-typescript';
+
+const customLogger: Logger = {
+  debug(message: string, ...args: unknown[]): void {
+    // Your custom debug logging
+  },
+  info(message: string, ...args: unknown[]): void {
+    // Your custom info logging
+  },
+  warn(message: string, ...args: unknown[]): void {
+    // Your custom warn logging
+  },
+  error(message: string, ...args: unknown[]): void {
+    // Your custom error logging
+  },
+};
+
+const client = new JivaApiClient({
+  apiKey: 'your-api-key',
+  workflowId: 'your-workflow-id',
+  // ... other config ...
+  logging: {
+    logger: customLogger,
+    level: 'info',
+  },
+});
+```
+
+**Disable Logging:**
+
+```typescript
+const client = new JivaApiClient({
+  apiKey: 'your-api-key',
+  workflowId: 'your-workflow-id',
+  // ... other config ...
+  logging: {
+    enabled: false, // Disable all logging
+  },
 });
 ```
 
@@ -402,17 +489,19 @@ if (response.data?.json.default.mode === 'SCREEN_RESPONSE') {
 
 **Note:** The upload cache workflow IDs are found in your Jiva platform project, alongside the main chat workflow. They are required when creating the client instance.
 
-### Subscribing to Real-Time Updates (WebSocket)
+### Subscribing to Real-Time Updates (EventSource / Server-Sent Events)
 
-You can subscribe to real-time updates from the agent using WebSockets. This allows you to receive live updates as the agent processes requests, including thinking messages, execution results, and progress updates.
+You can subscribe to real-time updates from the agent using EventSource (Server-Sent Events). This allows you to receive live updates as the agent processes requests, including thinking messages, execution results, and progress updates.
+
+**Note**: The `eventsource` package is included as a dependency and will be installed automatically. In browsers, EventSource is available natively, but the package is still included for compatibility. Node.js users will use the `eventsource` package automatically.
 
 ```typescript
-// Subscribe to socket updates for a session
-const ws = client.subscribeToSocket(
+// Subscribe to real-time updates for a session
+const es = client.subscribeToSocket(
   'session-123', // Session ID
   {
     onOpen: () => {
-      console.log('WebSocket connected');
+      console.log('EventSource connected');
     },
     onMessage: (message) => {
       console.log('Message:', message.message);
@@ -431,10 +520,10 @@ const ws = client.subscribeToSocket(
       }
     },
     onClose: (event) => {
-      console.log('WebSocket closed:', event.code, event.reason);
+      console.log('EventSource closed:', event.reason);
     },
     onError: (error) => {
-      console.error('WebSocket error:', error);
+      console.error('EventSource error:', error);
     },
     onReconnect: (attempt) => {
       console.log(`Reconnecting... (attempt ${attempt})`);
@@ -448,7 +537,7 @@ const ws = client.subscribeToSocket(
 );
 
 // Close the connection when done
-ws.close();
+es.close();
 ```
 
 #### Socket Message Types
@@ -477,7 +566,7 @@ And many more. See the full list in the type definitions.
 - **reconnectInterval** (default: `3000`) - Delay in milliseconds between reconnection attempts
 - **maxReconnectAttempts** (default: `10`) - Maximum number of reconnection attempts before giving up
 
-#### Example: Real-Time Chat with WebSocket
+#### Example: Real-Time Chat with EventSource
 
 ```typescript
 // Start a conversation
@@ -488,7 +577,7 @@ const response = await client.initiateConversation({
 });
 
 // Subscribe to real-time updates
-const ws = client.subscribeToSocket('session-123', {
+const es = client.subscribeToSocket('session-123', {
   onMessage: (message) => {
     if (message.types.includes('CONTENT_DELTA')) {
       // Stream content to user
@@ -505,7 +594,7 @@ const ws = client.subscribeToSocket('session-123', {
 ```
 
 **Note:** 
-- The WebSocket URL is constructed from the `socketBaseUrl` (defaults to `https://platform.jiva.ai/api`) and follows the pattern: `wss://{socketBaseUrl}/workflow-chat/{workflowId}/{sessionId}`. WebSocket URLs do not include `/invoke`.
+- The EventSource URL is constructed from the `socketBaseUrl` (defaults to `https://platform.jiva.ai/api`) and follows the pattern: `https://{socketBaseUrl}/ws/workflow-chat/{workflowId}/{sessionId}`. EventSource URLs use HTTPS (not WSS) and do not include `/invoke`.
 - API endpoints follow the pattern: `https://{baseUrl}/{workflowId}/{version}/invoke` where version defaults to "0". For test environments, you can set custom `baseUrl` and version numbers in the client configuration.
 
 ### Manual Polling
