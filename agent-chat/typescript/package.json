@@ -1,15 +1,30 @@
 {
-  "name": "@jivaai/agent-chat-typescript",
+  "name": "agent-chat-typescript",
   "version": "0.1.0",
   "description": "TypeScript library for integrating with Jiva.ai Agent Chat API",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/jiva-ai/jivaai-open-integrations.git",
+    "directory": "agent-chat/typescript"
+  },
+  "homepage": "https://github.com/jiva-ai/jivaai-open-integrations#readme",
+  "bugs": {
+    "url": "https://github.com/jiva-ai/jivaai-open-integrations/issues"
+  },
   "scripts": {
     "build": "tsc",
     "test": "jest",
     "test:watch": "jest --watch",
     "lint": "eslint src --ext .ts",
-    "clean": "rm -rf dist"
+    "clean": "rm -rf dist",
+    "prepublishOnly": "npm run clean && npm run build && npm test"
   },
   "keywords": [
     "jivaai",
@@ -17,8 +32,11 @@
     "api",
     "typescript"
   ],
-  "author": "",
+  "author": "info@jiva.ai",
   "license": "MIT",
+  "publishConfig": {
+    "access": "public"
+  },
   "devDependencies": {
     "@types/jest": "^29.5.0",
     "@types/node": "^20.0.0",
