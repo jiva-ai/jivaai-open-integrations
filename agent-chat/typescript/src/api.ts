@@ -935,7 +935,8 @@ export class JivaApiClient {
   }
 
   /**
-   * Creates an EventSource (Server-Sent Events) connection to subscribe to real-time agent updates
+   * Creates a Server-Sent Events (SSE) connection to subscribe to real-time agent updates
+   * Uses POST request to initiate the connection, then streams SSE events.
    * 
    * The backend Spring implementation sends an initial "connected" event when the connection is established,
    * followed by streaming agent update messages.
@@ -943,13 +944,13 @@ export class JivaApiClient {
    * @param sessionId - The session ID to subscribe to
    * @param callbacks - Event callbacks for socket events
    * @param options - Socket connection options
-   * @returns EventSource instance
+   * @returns An object that mimics EventSource interface for compatibility
    */
   subscribeToSocket(
     sessionId: string,
     callbacks: SocketCallbacks = {},
     options: SocketOptions = {}
-  ): EventSource {
+  ): { url: string; close: () => void; readyState: number } {
     if (!sessionId) {
       throw new Error('sessionId is required for socket subscription');
     }
@@ -963,10 +964,10 @@ export class JivaApiClient {
       // Derive socket base URL by removing /workflow from the end
       socketBaseUrl = baseUrl.replace(/\/workflow\/?$/, '') || DEFAULT_SOCKET_BASE_URL;
     }
-    // Construct URL: GET https://{SOCKET_BASE_URL}/workflow-chat/{workflowId}/{sessionId}
+    // Construct URL: POST https://{SOCKET_BASE_URL}/workflow-chat/{workflowId}/{sessionId}
     const url = `${socketBaseUrl}/workflow-chat/${this.config.workflowId}/${sessionId}`;
 
-    this.logger.info('Creating EventSource connection', {
+    this.logger.info('Creating SSE connection via POST', {
       sessionId,
       url,
       workflowId: this.config.workflowId,
@@ -974,25 +975,13 @@ export class JivaApiClient {
       autoReconnect: options.autoReconnect ?? true,
     });
 
-    // Get EventSource class (cached to avoid requiring during reconnection)
-    const EventSourceClass = getEventSourceClass();
-
-    // Prepare headers with API key
-    // Note: Native browser EventSource doesn't support custom headers, but eventsource package does
-    const headers: Record<string, string> = {
-      'api-key': this.config.apiKey,
-    };
-
-    this.logger.debug('EventSource connection details', {
-      url,
-      hasApiKey: !!this.config.apiKey,
-      apiKeyLength: this.config.apiKey?.length || 0,
-      apiKeyPrefix: this.config.apiKey?.substring(0, 10) || 'N/A',
-      headers: Object.keys(headers),
-    });
-
-    // Create EventSource with headers
-    const es = new EventSourceClass(url, { headers } as EventSourceInit);
+    // Create a controller to manage the connection
+    let abortController: AbortController | null = null;
+    let isClosed = false;
+    const CONNECTING = 0;
+    const OPEN = 1;
+    const CLOSED = 2;
+    let readyState = CONNECTING;
 
     // Get or initialize reconnect attempts for this sessionId
     const reconnectAttempts = this.reconnectAttemptsMap.get(sessionId) ?? 0;
@@ -1030,7 +1019,7 @@ export class JivaApiClient {
       const newAttemptCount = reconnectAttempts + 1;
       this.reconnectAttemptsMap.set(sessionId, newAttemptCount);
 
-      this.logger.info('Scheduling EventSource reconnection', {
+      this.logger.info('Scheduling SSE reconnection', {
         sessionId,
         attempt: newAttemptCount,
         maxAttempts,
@@ -1044,43 +1033,62 @@ export class JivaApiClient {
         isReconnecting = false;
         
         // Close the old connection before creating a new one
-        if (es.readyState !== 2) { // CLOSED
-          es.close();
+        if (abortController) {
+          abortController.abort();
         }
         // Create a new connection (will use the updated reconnectAttempts from the map)
         this.subscribeToSocket(sessionId, callbacks, options);
       }, reconnectInterval);
     };
 
-    // Handle the initial "connected" event from backend
-    // Backend sends: data("Connected to topic: {topic}")
-    es.addEventListener('connected', (event: MessageEvent) => {
-      isConnected = true;
-      isReconnecting = false;
-      // Reset reconnect attempts on successful connection
-      this.reconnectAttemptsMap.delete(sessionId);
-      this.reconnectScheduledMap.delete(sessionId);
-      if (reconnectTimeout) {
-        clearTimeout(reconnectTimeout);
-        reconnectTimeout = null;
-      }
-      this.logger.info('EventSource connection confirmed by server', {
-        sessionId,
-        connectionMessage: event.data,
-      });
-      callbacks.onOpen?.();
-    });
+    const startConnection = async () => {
+      abortController = new AbortController();
+      readyState = CONNECTING;
+      isClosed = false;
 
-    // Handle standard open event (fallback if "connected" event is not received)
-    es.onopen = () => {
-      // Only log if we haven't already received the "connected" event
-      if (!isConnected) {
-        this.logger.info('EventSource connection opened (no "connected" event received)', {
-          sessionId,
+      try {
+        // Prepare headers with API key
+        const headers: Record<string, string> = {
+          'Content-Type': 'application/json',
+          'api-key': this.config.apiKey,
+          'Accept': 'text/event-stream',
+        };
+
+        this.logger.debug('SSE connection details', {
+          url,
+          method: 'POST',
+          hasApiKey: !!this.config.apiKey,
+          apiKeyLength: this.config.apiKey?.length || 0,
+          apiKeyPrefix: this.config.apiKey?.substring(0, 10) || 'N/A',
+          headers: Object.keys(headers),
         });
+
+        // Make POST request to initiate SSE stream
+        const response = await fetch(url, {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({}), // Empty body for POST
+          signal: abortController.signal,
+        });
+
+        if (!response.ok) {
+          const errorDetails: Record<string, unknown> = {
+            sessionId,
+            status: response.status,
+            statusText: response.statusText,
+          };
+          this.logger.error('SSE connection failed', errorDetails);
+          callbacks.onError?.(new Error(`HTTP ${response.status}: ${response.statusText}`));
+          if (!isConnected && !isReconnecting) {
+            attemptReconnect();
+          }
+          return;
+        }
+
+        // Connection established
+        readyState = OPEN;
         isConnected = true;
         isReconnecting = false;
-        // Reset reconnect attempts on successful connection
         this.reconnectAttemptsMap.delete(sessionId);
         this.reconnectScheduledMap.delete(sessionId);
         if (reconnectTimeout) {
@@ -1088,114 +1096,161 @@ export class JivaApiClient {
           reconnectTimeout = null;
         }
         callbacks.onOpen?.();
-      }
-    };
 
-    // Handle regular messages (agent updates)
-    // These are the SocketMessage JSON objects with workflowId, sessionId, message, and types
-    es.onmessage = (event: MessageEvent) => {
-      try {
-        // Skip the initial "connected" event if it comes through onmessage (shouldn't happen, but handle it)
-        if (event.data && typeof event.data === 'string' && event.data.startsWith('Connected to topic:')) {
-          this.logger.debug('Received connection confirmation via onmessage', {
-            sessionId,
-            data: event.data,
-          });
+        // Parse SSE stream manually
+        const reader = response.body?.getReader();
+        if (!reader) {
+          throw new Error('Response body is not readable');
+        }
+
+        const decoder = new TextDecoder();
+        let buffer = '';
+
+        while (true) {
+          const { done, value } = await reader.read();
+          
+          if (done) {
+            // Stream ended
+            readyState = CLOSED;
+            isConnected = false;
+            this.logger.info('SSE connection closed', { sessionId });
+            callbacks.onClose?.({
+              code: 0,
+              reason: 'Stream ended',
+              wasClean: true,
+            });
+            attemptReconnect();
+            break;
+          }
+
+          // Decode chunk and add to buffer
+          buffer += decoder.decode(value, { stream: true });
+
+          // Process complete SSE messages (lines ending with \n\n)
+          let eventEndIndex: number;
+          while ((eventEndIndex = buffer.indexOf('\n\n')) !== -1) {
+            const eventText = buffer.substring(0, eventEndIndex);
+            buffer = buffer.substring(eventEndIndex + 2);
+
+            // Parse SSE format: "event: <name>\ndata: <data>"
+            let eventName = 'message';
+            let eventData = '';
+
+            for (const line of eventText.split('\n')) {
+              if (line.startsWith('event:')) {
+                eventName = line.substring(6).trim();
+              } else if (line.startsWith('data:')) {
+                eventData = line.substring(5).trim();
+              }
+            }
+
+            // Handle "connected" event
+            if (eventName === 'connected') {
+              this.logger.info('SSE connection confirmed by server', {
+                sessionId,
+                connectionMessage: eventData,
+              });
+              // onOpen already called, but we can log this
+            } else if (eventData) {
+              // Handle regular messages
+              try {
+                // Skip connection confirmation messages
+                if (eventData.startsWith('Connected to topic:')) {
+                  this.logger.debug('Received connection confirmation', {
+                    sessionId,
+                    data: eventData,
+                  });
+                  continue;
+                }
+
+                const message: SocketMessage = JSON.parse(eventData);
+                this.logger.debug('SSE message received', {
+                  sessionId,
+                  messageTypes: message.types,
+                  hasMessage: !!message.message,
+                  workflowId: message.workflowId,
+                });
+                callbacks.onMessage?.(message);
+              } catch (error) {
+                // If parsing fails, it might be a non-JSON message
+                this.logger.debug('SSE message is not JSON', {
+                  sessionId,
+                  rawData: eventData,
+                  error: error instanceof Error ? error.message : 'Unknown error',
+                });
+              }
+            }
+          }
+        }
+      } catch (error) {
+        if (abortController?.signal.aborted) {
+          // Connection was intentionally closed
+          readyState = CLOSED;
           return;
         }
 
-        const message: SocketMessage = JSON.parse(event.data);
-        this.logger.debug('EventSource message received', {
-          sessionId,
-          messageTypes: message.types,
-          hasMessage: !!message.message,
-          workflowId: message.workflowId,
-        });
-        callbacks.onMessage?.(message);
-      } catch (error) {
-        // If parsing fails, it might be a non-JSON message (e.g., the "connected" event)
-        // Log it but don't treat it as an error
-        this.logger.debug('EventSource message is not JSON (may be connection confirmation)', {
-          sessionId,
-          rawData: event.data,
-          error: error instanceof Error ? error.message : 'Unknown error',
-        });
-      }
-    };
-
-    es.onerror = (error: Event) => {
-      const readyState = es.readyState;
-      // EventSource readyState: 0 = CONNECTING, 1 = OPEN, 2 = CLOSED
-      
-      // Extract error details if available (eventsource package may provide status/message)
-      const errorDetails: Record<string, unknown> = {
-        sessionId,
-        readyState,
-      };
-      
-      if (error instanceof Error) {
-        errorDetails.error = error.message;
-        errorDetails.stack = error.stack;
-      }
-      
-      // Check if error object has status/message properties (eventsource package adds these)
-      if (error && typeof error === 'object') {
-        const errorObj = error as unknown as Record<string, unknown>;
-        if ('status' in errorObj) {
-          errorDetails.status = errorObj.status;
-        }
-        if ('message' in errorObj) {
-          errorDetails.message = errorObj.message;
-        }
-      }
-      
-      // Check if we're already attempting to reconnect to avoid log flooding
-      const isReconnectScheduled = this.reconnectScheduledMap.get(sessionId) ?? false;
-      const currentAttempts = this.reconnectAttemptsMap.get(sessionId) ?? 0;
-      
-      if (readyState === 2) {
-        // Connection closed
+        // Connection error
+        readyState = CLOSED;
         isConnected = false;
-        if (!isReconnectScheduled) {
-          this.logger.info('EventSource connection closed', errorDetails);
-        }
-        callbacks.onClose?.({
-          code: 0, // EventSource doesn't have close codes
-          reason: 'Connection closed',
-          wasClean: false,
-        });
-        attemptReconnect();
-      } else if (readyState === 0) {
-        // Connection failed to establish
-        // Only log error if we're not already reconnecting and haven't exceeded max attempts
+        
+        const errorDetails: Record<string, unknown> = {
+          sessionId,
+          error: error instanceof Error ? error.message : 'Unknown error',
+        };
+
+        const isReconnectScheduled = this.reconnectScheduledMap.get(sessionId) ?? false;
+        const currentAttempts = this.reconnectAttemptsMap.get(sessionId) ?? 0;
+
         if (!isReconnectScheduled && currentAttempts < maxAttempts) {
-          this.logger.error('EventSource connection failed', errorDetails);
+          this.logger.error('SSE connection failed', errorDetails);
         } else if (currentAttempts >= maxAttempts) {
-          // Only log once when max attempts reached
           if (!isReconnectScheduled) {
-            this.logger.error('EventSource connection failed (max attempts reached)', {
+            this.logger.error('SSE connection failed (max attempts reached)', {
               ...errorDetails,
               attempts: currentAttempts,
               maxAttempts,
             });
           }
         }
+
         callbacks.onError?.(error);
-        // Only attempt reconnect if not already connected and not already reconnecting
         if (!isConnected && !isReconnectScheduled) {
           attemptReconnect();
         }
-      } else {
-        // Other errors (readyState === 1, but error occurred)
-        // Only log if not already reconnecting
-        if (!isReconnectScheduled) {
-          this.logger.warn('EventSource error during connection', errorDetails);
-        }
-        callbacks.onError?.(error);
       }
     };
 
-    return es;
+    // Start the connection asynchronously
+    startConnection();
+
+    // Return an object that mimics EventSource interface
+    const connectionObject = {
+      url,
+      readyState,
+      close: () => {
+        isClosed = true;
+        readyState = CLOSED;
+        if (abortController) {
+          abortController.abort();
+        }
+        if (reconnectTimeout) {
+          clearTimeout(reconnectTimeout);
+          reconnectTimeout = null;
+        }
+        this.reconnectAttemptsMap.delete(sessionId);
+        this.reconnectScheduledMap.delete(sessionId);
+        this.logger.info('SSE connection closed by client', { sessionId });
+      },
+    };
+
+    // Make readyState accessible and updatable
+    Object.defineProperty(connectionObject, 'readyState', {
+      get: () => readyState,
+      enumerable: true,
+      configurable: true,
+    });
+
+    return connectionObject;
   }
 }
 
