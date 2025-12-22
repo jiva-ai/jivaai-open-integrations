@@ -15,12 +15,12 @@ const defaultSettings = {
     tableUploadCacheWorkflowId: '',
     tableUploadCacheVersion: '0',
     tableUploadCacheApiKey: '',
-    socketBaseUrl: 'https://platform.jiva.ai/api',
+    socketBaseUrl: 'https://api.jiva.ai/public-api',
 };
 
 let settings = { ...defaultSettings };
 let currentSessionId = `session-${Date.now()}`;
-let currentWebSocket = null;
+let currentSSEConnection = null;
 
 // DOM elements
 const messagesContainer = document.getElementById('messages');
@@ -199,76 +199,67 @@ function updateMessage(messageDiv, text) {
     messagesContainer.scrollTop = messagesContainer.scrollHeight;
 }
 
-// Connect to WebSocket for real-time updates
-function connectWebSocket(sessionId) {
+// Connect to SSE (Server-Sent Events) for real-time updates
+async function connectSSE(sessionId) {
     // Close existing connection
-    if (currentWebSocket) {
-        currentWebSocket.close();
+    if (currentSSEConnection) {
+        currentSSEConnection.abort();
+        currentSSEConnection = null;
     }
 
-    if (!settings.chatWorkflowId || !settings.socketBaseUrl) {
-        addDebugLog('error', 'WebSocket Connection Failed', 'Missing workflow ID or socket base URL');
+    if (!settings.chatWorkflowId || !settings.socketBaseUrl || !settings.chatApiKey) {
+        addDebugLog('error', 'SSE Connection Failed', 'Missing workflow ID, socket base URL, or API key');
         return;
     }
 
     try {
-        // Convert https:// to wss:// or http:// to ws://
-        const wsProtocol = settings.socketBaseUrl.startsWith('https://') ? 'wss://' : 'ws://';
-        const wsBaseUrl = settings.socketBaseUrl.replace(/^https?:\/\//, '');
-        const wsUrl = `${wsProtocol}${wsBaseUrl}/workflow-chat/${settings.chatWorkflowId}/${sessionId}`;
+        // Construct SSE URL: POST {socketBaseUrl}/workflow-chat/{workflowId}/{sessionId}
+        const sseUrl = `${settings.socketBaseUrl}/workflow-chat/${settings.chatWorkflowId}/${sessionId}`;
 
-        addDebugLog('websocket', 'WebSocket Connecting', {
-            url: wsUrl,
+        addDebugLog('websocket', 'SSE Connecting', {
+            url: sseUrl,
+            method: 'POST',
             sessionId: sessionId,
             workflowId: settings.chatWorkflowId
         });
 
-        const ws = new WebSocket(wsUrl);
-        currentWebSocket = ws;
+        const abortController = new AbortController();
+        currentSSEConnection = abortController;
+
+        // Prepare headers with API key
+        const headers = {
+            'Content-Type': 'application/json',
+            'api-key': settings.chatApiKey,
+            'Accept': 'text/event-stream',
+        };
+
+        // Make POST request to initiate SSE stream
+        const response = await fetch(sseUrl, {
+            method: 'POST',
+            headers: headers,
+            body: JSON.stringify({}), // Empty body for POST
+            signal: abortController.signal,
+        });
+
+        if (!response.ok) {
+            addDebugLog('error', 'SSE Connection Failed', {
+                status: response.status,
+                statusText: response.statusText,
+                url: sseUrl
+            });
+            currentSSEConnection = null;
+            return;
+        }
+
+        addDebugLog('websocket', 'SSE Connected', {
+            url: sseUrl,
+            sessionId: sessionId
+        });
 
         let thinkingMessageDiv = null;
 
-        ws.onopen = () => {
-            console.log('WebSocket connected');
-            addDebugLog('websocket', 'WebSocket Connected', {
-                url: wsUrl,
-                sessionId: sessionId
-            });
-        };
-
-        ws.onmessage = (event) => {
-            try {
-                const message = JSON.parse(event.data);
-                addDebugLog('websocket', 'WebSocket Message Received', message);
-                handleSocketMessage(message, thinkingMessageDiv);
-            } catch (error) {
-                console.error('Failed to parse socket message:', error);
-                addDebugLog('error', 'WebSocket Parse Error', {
-                    error: error.message,
-                    rawData: event.data.substring(0, 200)
-                });
-            }
-        };
-
-        ws.onclose = (event) => {
-            console.log('WebSocket closed:', event.code, event.reason);
-            addDebugLog('websocket', 'WebSocket Closed', {
-                code: event.code,
-                reason: event.reason,
-                wasClean: event.wasClean
-            });
-            currentWebSocket = null;
-        };
-
-        ws.onerror = (error) => {
-            console.error('WebSocket error:', error);
-            addDebugLog('error', 'WebSocket Error', {
-                error: error.message || 'Unknown error'
-            });
-        };
-
-        // Helper function to handle socket messages
-        function handleSocketMessage(message, thinkingMessageDiv) {
+        // Helper function to handle socket messages (scoped to this connection)
+        const handleSocketMessage = (message) => {
             const { types, message: msg } = message;
 
             // Handle thinking messages
@@ -326,11 +317,93 @@ function connectWebSocket(sessionId) {
                     updateMessage(thinkingMessageDiv, `Progress: ${msg}`);
                 }
             }
+        };
+
+        // Parse SSE stream manually
+        const reader = response.body?.getReader();
+        if (!reader) {
+            throw new Error('Response body is not readable');
+        }
+
+        const decoder = new TextDecoder();
+        let buffer = '';
+
+        // Process SSE stream
+        while (true) {
+            const { done, value } = await reader.read();
+            
+            if (done) {
+                // Stream ended
+                addDebugLog('websocket', 'SSE Connection Closed', {
+                    sessionId: sessionId,
+                    reason: 'Stream ended'
+                });
+                currentSSEConnection = null;
+                break;
+            }
+
+            // Decode chunk and add to buffer
+            buffer += decoder.decode(value, { stream: true });
+
+            // Process complete SSE messages (lines ending with \n\n)
+            let eventEndIndex;
+            while ((eventEndIndex = buffer.indexOf('\n\n')) !== -1) {
+                const eventText = buffer.substring(0, eventEndIndex);
+                buffer = buffer.substring(eventEndIndex + 2);
+
+                // Parse SSE format: "event: <name>\ndata: <data>"
+                let eventName = 'message';
+                let eventData = '';
+
+                for (const line of eventText.split('\n')) {
+                    if (line.startsWith('event:')) {
+                        eventName = line.substring(6).trim();
+                    } else if (line.startsWith('data:')) {
+                        eventData = line.substring(5).trim();
+                    }
+                }
+
+                // Handle "connected" event
+                if (eventName === 'connected') {
+                    addDebugLog('websocket', 'SSE Connection Confirmed', {
+                        sessionId: sessionId,
+                        data: eventData
+                    });
+                    continue;
+                }
+
+                // Parse message data
+                if (eventData) {
+                    try {
+                        const message = JSON.parse(eventData);
+                        addDebugLog('websocket', 'SSE Message Received', message);
+                        handleSocketMessage(message);
+                    } catch (error) {
+                        console.error('Failed to parse SSE message:', error);
+                        addDebugLog('error', 'SSE Parse Error', {
+                            error: error.message,
+                            rawData: eventData.substring(0, 200)
+                        });
+                    }
+                }
+            }
         }
     } catch (error) {
-        console.error('Failed to connect WebSocket:', error);
+        if (error.name === 'AbortError') {
+            addDebugLog('websocket', 'SSE Connection Aborted', {
+                sessionId: sessionId
+            });
+        } else {
+            console.error('Failed to connect SSE:', error);
+            addDebugLog('error', 'SSE Connection Error', {
+                error: error.message || 'Unknown error',
+                sessionId: sessionId
+            });
+        }
+        currentSSEConnection = null;
     }
 }
+
 
 // Send chat message
 async function sendMessage() {
@@ -353,8 +426,8 @@ async function sendMessage() {
     addMessage(message, 'user');
     messageInput.value = '';
 
-    // Connect to WebSocket for real-time updates
-    connectWebSocket(currentSessionId);
+    // Connect to SSE for real-time updates
+    connectSSE(currentSessionId);
 
     // Log request
     const requestPayload = {
@@ -418,9 +491,9 @@ async function sendMessage() {
                     'assistant'
                 );
             } else if (responseData.message) {
-                // Regular response - WebSocket should have already handled it
-                // But add it here as fallback if WebSocket didn't work
-                if (!currentWebSocket || currentWebSocket.readyState !== WebSocket.OPEN) {
+                // Regular response - SSE should have already handled it
+                // But add it here as fallback if SSE didn't work
+                if (!currentSSEConnection) {
                     addMessage(responseData.message, 'assistant');
                 }
             }
