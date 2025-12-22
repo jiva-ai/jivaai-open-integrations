@@ -32,6 +32,14 @@ const DEFAULT_SOCKET_BASE_URL = 'https://api.jiva.ai/public-api';
 let cachedEventSourceClass: typeof EventSource | null = null;
 
 /**
+ * Clears the cached EventSource class (useful for testing)
+ * @internal
+ */
+export function clearEventSourceCache(): void {
+  cachedEventSourceClass = null;
+}
+
+/**
  * Gets the EventSource class, using native EventSource in browsers or eventsource package in Node.js
  */
 function getEventSourceClass(): typeof EventSource {
@@ -220,6 +228,10 @@ async function makeRequest<T = unknown>(
  */
 export class JivaApiClient {
   private config: ApiConfig;
+  // Track reconnect attempts per sessionId to persist across recursive calls
+  private reconnectAttemptsMap = new Map<string, number>();
+  // Track if a reconnect is already scheduled for a sessionId
+  private reconnectScheduledMap = new Map<string, boolean>();;
   private logger: Logger;
 
   constructor(config: ApiConfig) {
@@ -982,37 +994,60 @@ export class JivaApiClient {
     // Create EventSource with headers
     const es = new EventSourceClass(url, { headers } as EventSourceInit);
 
-    let reconnectAttempts = 0;
+    // Get or initialize reconnect attempts for this sessionId
+    const reconnectAttempts = this.reconnectAttemptsMap.get(sessionId) ?? 0;
     const maxAttempts = options.maxReconnectAttempts ?? 10;
     const reconnectInterval = options.reconnectInterval ?? 3000;
     const autoReconnect = options.autoReconnect ?? true;
     let reconnectTimeout: ReturnType<typeof setTimeout> | null = null;
     let isConnected = false;
+    let isReconnecting = false;
 
     const attemptReconnect = () => {
+      // Prevent multiple simultaneous reconnect attempts
+      if (isReconnecting || this.reconnectScheduledMap.get(sessionId)) {
+        this.logger.debug('Reconnect already in progress, skipping', { sessionId });
+        return;
+      }
+
       if (!autoReconnect || reconnectAttempts >= maxAttempts) {
         this.logger.warn('Max reconnection attempts reached or autoReconnect disabled', {
           sessionId,
           reconnectAttempts,
           maxAttempts,
         });
+        // Clean up tracking
+        this.reconnectAttemptsMap.delete(sessionId);
+        this.reconnectScheduledMap.delete(sessionId);
         return;
       }
 
-      reconnectAttempts++;
-      this.logger.info('Attempting to reconnect EventSource', {
+      // Mark that we're scheduling a reconnect
+      this.reconnectScheduledMap.set(sessionId, true);
+      isReconnecting = true;
+
+      // Increment and store reconnect attempts
+      const newAttemptCount = reconnectAttempts + 1;
+      this.reconnectAttemptsMap.set(sessionId, newAttemptCount);
+
+      this.logger.info('Scheduling EventSource reconnection', {
         sessionId,
-        attempt: reconnectAttempts,
+        attempt: newAttemptCount,
         maxAttempts,
+        delayMs: reconnectInterval,
       });
-      callbacks.onReconnect?.(reconnectAttempts);
+      callbacks.onReconnect?.(newAttemptCount);
 
       reconnectTimeout = setTimeout(() => {
+        // Clear the scheduled flag before attempting reconnect
+        this.reconnectScheduledMap.delete(sessionId);
+        isReconnecting = false;
+        
         // Close the old connection before creating a new one
         if (es.readyState !== 2) { // CLOSED
           es.close();
         }
-        // Create a new connection
+        // Create a new connection (will use the updated reconnectAttempts from the map)
         this.subscribeToSocket(sessionId, callbacks, options);
       }, reconnectInterval);
     };
@@ -1021,7 +1056,10 @@ export class JivaApiClient {
     // Backend sends: data("Connected to topic: {topic}")
     es.addEventListener('connected', (event: MessageEvent) => {
       isConnected = true;
-      reconnectAttempts = 0; // Reset on successful connection
+      isReconnecting = false;
+      // Reset reconnect attempts on successful connection
+      this.reconnectAttemptsMap.delete(sessionId);
+      this.reconnectScheduledMap.delete(sessionId);
       if (reconnectTimeout) {
         clearTimeout(reconnectTimeout);
         reconnectTimeout = null;
@@ -1041,7 +1079,10 @@ export class JivaApiClient {
           sessionId,
         });
         isConnected = true;
-        reconnectAttempts = 0;
+        isReconnecting = false;
+        // Reset reconnect attempts on successful connection
+        this.reconnectAttemptsMap.delete(sessionId);
+        this.reconnectScheduledMap.delete(sessionId);
         if (reconnectTimeout) {
           clearTimeout(reconnectTimeout);
           reconnectTimeout = null;
@@ -1108,10 +1149,16 @@ export class JivaApiClient {
         }
       }
       
+      // Check if we're already attempting to reconnect to avoid log flooding
+      const isReconnectScheduled = this.reconnectScheduledMap.get(sessionId) ?? false;
+      const currentAttempts = this.reconnectAttemptsMap.get(sessionId) ?? 0;
+      
       if (readyState === 2) {
         // Connection closed
         isConnected = false;
-        this.logger.info('EventSource connection closed', errorDetails);
+        if (!isReconnectScheduled) {
+          this.logger.info('EventSource connection closed', errorDetails);
+        }
         callbacks.onClose?.({
           code: 0, // EventSource doesn't have close codes
           reason: 'Connection closed',
@@ -1120,15 +1167,30 @@ export class JivaApiClient {
         attemptReconnect();
       } else if (readyState === 0) {
         // Connection failed to establish
-        this.logger.error('EventSource connection failed', errorDetails);
+        // Only log error if we're not already reconnecting and haven't exceeded max attempts
+        if (!isReconnectScheduled && currentAttempts < maxAttempts) {
+          this.logger.error('EventSource connection failed', errorDetails);
+        } else if (currentAttempts >= maxAttempts) {
+          // Only log once when max attempts reached
+          if (!isReconnectScheduled) {
+            this.logger.error('EventSource connection failed (max attempts reached)', {
+              ...errorDetails,
+              attempts: currentAttempts,
+              maxAttempts,
+            });
+          }
+        }
         callbacks.onError?.(error);
-        // EventSource will automatically attempt to reconnect, but we can track it
-        if (!isConnected) {
+        // Only attempt reconnect if not already connected and not already reconnecting
+        if (!isConnected && !isReconnectScheduled) {
           attemptReconnect();
         }
       } else {
         // Other errors (readyState === 1, but error occurred)
-        this.logger.warn('EventSource error during connection', errorDetails);
+        // Only log if not already reconnecting
+        if (!isReconnectScheduled) {
+          this.logger.warn('EventSource error during connection', errorDetails);
+        }
         callbacks.onError?.(error);
       }
     };
