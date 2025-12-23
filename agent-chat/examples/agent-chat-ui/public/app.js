@@ -15,7 +15,7 @@ const defaultSettings = {
     tableUploadCacheWorkflowId: '',
     tableUploadCacheVersion: '0',
     tableUploadCacheApiKey: '',
-    socketBaseUrl: 'https://api.jiva.ai/public-api',
+    socketBaseUrl: 'https://api.jiva.ai/public-api/workflow-chat',
 };
 
 let settings = { ...defaultSettings };
@@ -213,8 +213,9 @@ async function connectSSE(sessionId) {
     }
 
     try {
-        // Construct SSE URL: POST {socketBaseUrl}/workflow-chat/{workflowId}/{sessionId}
-        const sseUrl = `${settings.socketBaseUrl}/workflow-chat/${settings.chatWorkflowId}/${sessionId}`;
+        // Construct SSE URL: POST {socketBaseUrl}/{workflowId}/{sessionId}
+        // socketBaseUrl should already include /workflow-chat
+        const sseUrl = `${settings.socketBaseUrl}/${settings.chatWorkflowId}/${sessionId}`;
 
         addDebugLog('websocket', 'SSE Connecting', {
             url: sseUrl,

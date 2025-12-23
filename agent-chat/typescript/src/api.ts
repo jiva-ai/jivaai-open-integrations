@@ -15,6 +15,8 @@ import {
   ConversationResponse,
   PollRequest,
   PollResponse,
+  PollResponseData,
+  PollExecution,
   PollingOptions,
   UploadResponse,
   SocketMessage,
@@ -460,6 +462,59 @@ export class JivaApiClient {
     }
 
     return response;
+  }
+
+  /**
+   * Checks if all executions in a poll response are complete (not PENDING)
+   * 
+   * Handles both response formats:
+   * - json.default.data[0].executions (array format with data property)
+   * - json.default.executions (direct format)
+   * 
+   * @param pollResponse - The poll response to check
+   * @returns true if all executions are complete (not PENDING), false otherwise
+   */
+  checkCompletionStatus(pollResponse: PollResponse): boolean {
+    if (!pollResponse.json?.default) {
+      return false;
+    }
+
+    const responseData = pollResponse.json.default as PollResponseData & { data?: Array<{ executions?: Array<{ state?: string }> }> };
+    
+    // Check if there's a data array (newer format: json.default.data[0].executions)
+    if (responseData.data && Array.isArray(responseData.data) && responseData.data.length > 0) {
+      const firstDataItem = responseData.data[0];
+      if (firstDataItem.executions && Array.isArray(firstDataItem.executions)) {
+        // Check if all executions are not PENDING
+        const allComplete = firstDataItem.executions.every(
+          (exec: { state?: string }) => exec.state !== 'PENDING'
+        );
+        this.logger.debug('Completion check (data array format)', {
+          totalExecutions: firstDataItem.executions.length,
+          allComplete,
+          states: firstDataItem.executions.map((e: { state?: string }) => e.state),
+        });
+        return allComplete;
+      }
+    }
+    
+    // Fallback to direct executions array (older format: json.default.executions)
+    if (responseData.executions && Array.isArray(responseData.executions)) {
+      // Check if all executions are not PENDING
+      const allComplete = responseData.executions.every(
+        (exec: PollExecution) => exec.state !== 'PENDING'
+      );
+      this.logger.debug('Completion check (direct format)', {
+        totalExecutions: responseData.executions.length,
+        allComplete,
+        states: responseData.executions.map((e: PollExecution) => e.state),
+      });
+      return allComplete;
+    }
+
+    // If no executions array, consider it complete
+    this.logger.debug('Completion check: no executions found, considering complete');
+    return true;
   }
 
   /**

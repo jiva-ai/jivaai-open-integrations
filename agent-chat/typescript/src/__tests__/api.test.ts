@@ -1735,6 +1735,286 @@ describe('JivaApiClient', () => {
     });
   });
 
+  describe('checkCompletionStatus', () => {
+    it('should return false when all executions are PENDING (newer format with data array)', () => {
+      const client = new JivaApiClient(mockConfig);
+      
+      const pollResponse: PollResponse = {
+        status: 200,
+        statusText: 'OK',
+        workflowExecutionId: '694a7bb32f54e82fcca72468',
+        errorMessages: null,
+        data: {},
+        strings: {},
+        base64Files: {},
+        base64MultiFiles: {},
+        vectorDatabaseIndexIds: {},
+        metadata: {},
+        json: {
+          default: {
+            state: 'OK',
+            mode: 'POLL_RESPONSE',
+            data: [
+              {
+                message: null,
+                state: 'OK',
+                mode: 'CHAT_RESPONSE',
+                id: '694a7bc026f2ba6ca4ab6a8e',
+                screens: [],
+                executions: [
+                  {
+                    startTime: 1766489024605,
+                    state: 'PENDING',
+                  },
+                  {
+                    startTime: 1766489024605,
+                    state: 'PENDING',
+                  },
+                  {
+                    startTime: 1766489024605,
+                    state: 'PENDING',
+                  },
+                  {
+                    startTime: 1766489024605,
+                    state: 'PENDING',
+                  },
+                  {
+                    startTime: 1766489024605,
+                    state: 'PENDING',
+                  },
+                ],
+              },
+            ],
+          } as any,
+        },
+      };
+
+      const result = client.checkCompletionStatus(pollResponse);
+      expect(result).toBe(false);
+    });
+
+    it('should return true when all executions are complete (not PENDING) in newer format', () => {
+      const client = new JivaApiClient(mockConfig);
+      
+      const pollResponse: PollResponse = {
+        status: 200,
+        statusText: 'OK',
+        workflowExecutionId: '694a7bb32f54e82fcca72468',
+        errorMessages: null,
+        data: {},
+        strings: {},
+        base64Files: {},
+        base64MultiFiles: {},
+        vectorDatabaseIndexIds: {},
+        metadata: {},
+        json: {
+          default: {
+            state: 'OK',
+            mode: 'POLL_RESPONSE',
+            data: [
+              {
+                message: null,
+                state: 'OK',
+                mode: 'CHAT_RESPONSE',
+                id: '694a7bc026f2ba6ca4ab6a8e',
+                screens: [],
+                executions: [
+                  {
+                    startTime: 1766489024605,
+                    state: 'OK',
+                  },
+                  {
+                    startTime: 1766489024605,
+                    state: 'RUNNING',
+                  },
+                  {
+                    startTime: 1766489024605,
+                    state: 'ERROR',
+                  },
+                ],
+              },
+            ],
+          } as any,
+        },
+      };
+
+      const result = client.checkCompletionStatus(pollResponse);
+      expect(result).toBe(true);
+    });
+
+    it('should return true when some executions are PENDING and some are complete in newer format', () => {
+      const client = new JivaApiClient(mockConfig);
+      
+      const pollResponse: PollResponse = {
+        status: 200,
+        statusText: 'OK',
+        workflowExecutionId: '694a7bb32f54e82fcca72468',
+        errorMessages: null,
+        data: {},
+        strings: {},
+        base64Files: {},
+        base64MultiFiles: {},
+        vectorDatabaseIndexIds: {},
+        metadata: {},
+        json: {
+          default: {
+            state: 'OK',
+            mode: 'POLL_RESPONSE',
+            data: [
+              {
+                message: null,
+                state: 'OK',
+                mode: 'CHAT_RESPONSE',
+                id: '694a7bc026f2ba6ca4ab6a8e',
+                screens: [],
+                executions: [
+                  {
+                    startTime: 1766489024605,
+                    state: 'PENDING',
+                  },
+                  {
+                    startTime: 1766489024605,
+                    state: 'OK',
+                  },
+                  {
+                    startTime: 1766489024605,
+                    state: 'PENDING',
+                  },
+                ],
+              },
+            ],
+          } as any,
+        },
+      };
+
+      const result = client.checkCompletionStatus(pollResponse);
+      expect(result).toBe(false);
+    });
+
+    it('should return false when all executions are PENDING (older format with direct executions)', () => {
+      const client = new JivaApiClient(mockConfig);
+      
+      const pollResponse: PollResponse = {
+        workflowExecutionId: 'exec-123',
+        errorMessages: null,
+        data: {},
+        strings: {},
+        base64Files: {},
+        vectorDatabaseIndexIds: {},
+        metadata: {},
+        json: {
+          default: {
+            state: 'RUNNING',
+            mode: 'POLL_RESPONSE',
+            executions: [
+              {
+                startTime: 1234567890,
+                state: 'PENDING',
+                output: {
+                  response: 'Processing...',
+                  type: 'text',
+                },
+              },
+              {
+                startTime: 1234567891,
+                state: 'PENDING',
+                output: {
+                  response: 'Processing...',
+                  type: 'text',
+                },
+              },
+            ],
+          },
+        },
+      };
+
+      const result = client.checkCompletionStatus(pollResponse);
+      expect(result).toBe(false);
+    });
+
+    it('should return true when all executions are complete in older format', () => {
+      const client = new JivaApiClient(mockConfig);
+      
+      const pollResponse: PollResponse = {
+        workflowExecutionId: 'exec-123',
+        errorMessages: null,
+        data: {},
+        strings: {},
+        base64Files: {},
+        vectorDatabaseIndexIds: {},
+        metadata: {},
+        json: {
+          default: {
+            state: 'OK',
+            mode: 'POLL_RESPONSE',
+            executions: [
+              {
+                startTime: 1234567890,
+                state: 'OK',
+                output: {
+                  response: 'Completed',
+                  type: 'text',
+                },
+              },
+              {
+                startTime: 1234567891,
+                state: 'RUNNING',
+                output: {
+                  response: 'Running',
+                  type: 'text',
+                },
+              },
+            ],
+          },
+        },
+      };
+
+      const result = client.checkCompletionStatus(pollResponse);
+      expect(result).toBe(true);
+    });
+
+    it('should return true when no executions array is found', () => {
+      const client = new JivaApiClient(mockConfig);
+      
+      const pollResponse: PollResponse = {
+        workflowExecutionId: 'exec-123',
+        errorMessages: null,
+        data: {},
+        strings: {},
+        base64Files: {},
+        vectorDatabaseIndexIds: {},
+        metadata: {},
+        json: {
+          default: {
+            state: 'OK',
+            mode: 'POLL_RESPONSE',
+          },
+        },
+      };
+
+      const result = client.checkCompletionStatus(pollResponse);
+      expect(result).toBe(true);
+    });
+
+    it('should return false when json.default is missing', () => {
+      const client = new JivaApiClient(mockConfig);
+      
+      const pollResponse = {
+        workflowExecutionId: 'exec-123',
+        errorMessages: null,
+        data: {},
+        strings: {},
+        base64Files: {},
+        vectorDatabaseIndexIds: {},
+        metadata: {},
+        json: {},
+      } as PollResponse;
+
+      const result = client.checkCompletionStatus(pollResponse);
+      expect(result).toBe(false);
+    });
+  });
+
   describe('upload methods', () => {
     const mockUploadResponse: UploadResponse = {
       workflowExecutionId: 'upload-exec-123',

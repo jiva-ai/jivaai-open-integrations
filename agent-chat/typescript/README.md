@@ -755,6 +755,42 @@ Creates a Server-Sent Events (SSE) connection to subscribe to real-time agent up
 - **options**: `SocketOptions` (optional) - Socket connection options
 - **Returns**: `{ url: string; close: () => void; readyState: number }`
 
+##### `checkCompletionStatus(pollResponse)`
+
+Checks if all executions in a poll response are complete (not PENDING). This method is useful when manually polling to determine if a workflow execution has finished processing.
+
+- **pollResponse**: `PollResponse` - The poll response to check
+- **Returns**: `boolean` - `true` if all executions are complete (not PENDING), `false` otherwise
+
+**Example:**
+
+```typescript
+// Poll for status
+const pollResponse = await client.poll({
+  sessionId: 'user-123-thread-1',
+  id: 'exec-456',
+  mode: 'POLL_REQUEST',
+});
+
+if (pollResponse.data) {
+  // Check if all executions are complete
+  const isComplete = client.checkCompletionStatus(pollResponse.data);
+  
+  if (isComplete) {
+    console.log('All executions completed!');
+  } else {
+    console.log('Still processing...');
+    // Poll again after a delay
+  }
+}
+```
+
+**Note:** This method handles two response formats:
+- **Newer format**: `json.default.data[0].executions` (array format with data property)
+- **Older format**: `json.default.executions` (direct format)
+
+If no executions array is found, the method returns `true` (considers it complete).
+
 ##### `get(endpoint?, onSuccess?, onError?)`
 
 Makes a GET request to the API.

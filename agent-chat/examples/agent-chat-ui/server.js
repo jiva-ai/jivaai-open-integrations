@@ -69,6 +69,7 @@ app.post('/api/chat', async (req, res) => {
 
     const client = getClient(settings);
 
+    // Initiate conversation
     const response = await client.initiateConversation({
       sessionId,
       message,
@@ -79,6 +80,52 @@ app.post('/api/chat', async (req, res) => {
       return res.status(response.status || 500).json({ error: response.error });
     }
 
+    // If response has RUNNING state with an ID, poll until all executions are complete
+    if (response.data?.json?.default?.state === 'RUNNING' && response.data.json.default.id) {
+      const executionId = response.data.json.default.id;
+      const maxPollAttempts = 100; // Maximum number of polling attempts
+      const pollInterval = 5000; // 5 seconds
+      let pollAttempts = 0;
+      let lastPollResponse = response.data;
+
+      while (pollAttempts < maxPollAttempts) {
+        // Wait before polling
+        await new Promise((resolve) => setTimeout(resolve, pollInterval));
+
+        // Poll for status
+        const pollResponse = await client.poll({
+          sessionId,
+          id: executionId,
+          mode: 'POLL_REQUEST',
+        });
+
+        if (pollResponse.error) {
+          return res.status(pollResponse.status || 500).json({ error: pollResponse.error });
+        }
+
+        if (pollResponse.data) {
+          lastPollResponse = pollResponse.data;
+
+          // Check if all executions are complete
+          if (client.checkCompletionStatus(pollResponse.data)) {
+            // All executions are complete, return the final response
+            return res.json(pollResponse.data);
+          }
+
+          // Check if the overall state is ERROR
+          if (pollResponse.data.json?.default?.state === 'ERROR') {
+            return res.json(pollResponse.data);
+          }
+        }
+
+        pollAttempts++;
+      }
+
+      // If we've exhausted polling attempts, return the last response
+      return res.json(lastPollResponse);
+    }
+
+    // Immediate response (OK or ERROR)
     res.json(response.data);
   } catch (error) {
     console.error('Chat error:', error);

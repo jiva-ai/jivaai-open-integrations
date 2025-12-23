@@ -53,13 +53,14 @@
                 <div class="settings-section">
                     <h3>Base Configuration</h3>
                     <div class="form-group">
-                        <label>Base URL (used for all endpoints):</label>
+                        <label>Workflow Base URL:</label>
                         <input type="text" id="baseUrl" placeholder="https://api.jiva.ai/public-api/workflow" value="https://api.jiva.ai/public-api/workflow">
-                        <small class="form-hint">Example: https://api.jiva.ai/public-api/workflow</small>
+                        <small class="form-hint">Base URL for workflow API calls (e.g., https://api.jiva.ai/public-api/workflow)</small>
                     </div>
                     <div class="form-group">
                         <label>Socket Base URL:</label>
-                        <input type="text" id="socketBaseUrl" placeholder="https://api.jiva.ai/public-api" value="https://api.jiva.ai/public-api">
+                        <input type="text" id="socketBaseUrl" placeholder="https://api.jiva.ai/public-api/workflow-chat" value="https://api.jiva.ai/public-api/workflow-chat">
+                        <small class="form-hint">Base URL for socket/SSE connections (e.g., https://api.jiva.ai/public-api/)</small>
                     </div>
                 </div>
 
