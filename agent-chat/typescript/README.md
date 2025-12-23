@@ -512,6 +512,79 @@ if (pollResponse.error) {
 
 **Note**: Only 1 sessionId can be polled per call. If you need to poll multiple IDs, make separate API calls simultaneously. The recommended polling frequency is 1 second to avoid being blacklisted.
 
+### Checking Completion Status
+
+When polling for workflow execution results, you can use `checkCompletionStatus()` to determine if all executions within a poll response have completed. This is useful for custom polling logic where you want to check if all sub-executions are finished.
+
+```typescript
+// Poll for a specific execution ID
+const pollResponse = await client.poll({
+  sessionId: 'user-123-thread-1',
+  id: 'exec-456',
+  mode: 'POLL_REQUEST',
+});
+
+if (pollResponse.data) {
+  // Check if all executions are complete
+  const isComplete = client.checkCompletionStatus(pollResponse.data);
+  
+  if (isComplete) {
+    console.log('All executions have completed');
+    // Process final results
+  } else {
+    console.log('Some executions are still pending');
+    // Continue polling
+  }
+}
+```
+
+**How it works:**
+- Returns `true` if all executions are complete (not in `PENDING` state)
+- Returns `false` if any execution is still `PENDING` or if the response structure is invalid
+- Handles both response formats:
+  - Newer format: `json.default.data[0].executions` (array format with data property)
+  - Older format: `json.default.executions` (direct format)
+- If no executions array is found, it considers the response complete (returns `true`)
+
+**Example with custom polling loop:**
+
+```typescript
+async function pollUntilComplete(sessionId: string, executionId: string) {
+  let isComplete = false;
+  let attempts = 0;
+  const maxAttempts = 30;
+  
+  while (!isComplete && attempts < maxAttempts) {
+    const pollResponse = await client.poll({
+      sessionId,
+      id: executionId,
+      mode: 'POLL_REQUEST',
+    });
+    
+    if (pollResponse.error) {
+      throw new Error(pollResponse.error);
+    }
+    
+    if (pollResponse.data) {
+      isComplete = client.checkCompletionStatus(pollResponse.data);
+      
+      if (!isComplete) {
+        // Wait before next poll
+        await new Promise(resolve => setTimeout(resolve, 1000));
+      }
+    }
+    
+    attempts++;
+  }
+  
+  if (!isComplete) {
+    throw new Error('Polling timeout: executions did not complete');
+  }
+  
+  return pollResponse.data;
+}
+```
+
 ### Using Promises (without callbacks)
 
 All methods return promises, so you can use async/await or `.then()`:
@@ -754,42 +827,6 @@ Creates a Server-Sent Events (SSE) connection to subscribe to real-time agent up
 - **callbacks**: `SocketCallbacks` (optional) - Event callbacks
 - **options**: `SocketOptions` (optional) - Socket connection options
 - **Returns**: `{ url: string; close: () => void; readyState: number }`
-
-##### `checkCompletionStatus(pollResponse)`
-
-Checks if all executions in a poll response are complete (not PENDING). This method is useful when manually polling to determine if a workflow execution has finished processing.
-
-- **pollResponse**: `PollResponse` - The poll response to check
-- **Returns**: `boolean` - `true` if all executions are complete (not PENDING), `false` otherwise
-
-**Example:**
-
-```typescript
-// Poll for status
-const pollResponse = await client.poll({
-  sessionId: 'user-123-thread-1',
-  id: 'exec-456',
-  mode: 'POLL_REQUEST',
-});
-
-if (pollResponse.data) {
-  // Check if all executions are complete
-  const isComplete = client.checkCompletionStatus(pollResponse.data);
-  
-  if (isComplete) {
-    console.log('All executions completed!');
-  } else {
-    console.log('Still processing...');
-    // Poll again after a delay
-  }
-}
-```
-
-**Note:** This method handles two response formats:
-- **Newer format**: `json.default.data[0].executions` (array format with data property)
-- **Older format**: `json.default.executions` (direct format)
-
-If no executions array is found, the method returns `true` (considers it complete).
 
 ##### `get(endpoint?, onSuccess?, onError?)`
 
