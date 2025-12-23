@@ -80,17 +80,67 @@ app.post('/api/chat', async (req, res) => {
       return res.status(response.status || 500).json({ error: response.error });
     }
 
-    // If response has RUNNING state with an ID, poll until all executions are complete
-    if (response.data?.json?.default?.state === 'RUNNING' && response.data.json.default.id) {
-      const executionId = response.data.json.default.id;
+    // Helper function to check if there are PENDING executions
+    const hasPendingExecutions = (responseData) => {
+      if (!responseData?.json?.default) {
+        return false;
+      }
+
+      const defaultData = responseData.json.default;
+      
+      // Check data array format: json.default.data[0].executions
+      if (defaultData.data && Array.isArray(defaultData.data) && defaultData.data.length > 0) {
+        const firstDataItem = defaultData.data[0];
+        if (firstDataItem.executions && Array.isArray(firstDataItem.executions)) {
+          return firstDataItem.executions.some(exec => exec.state === 'PENDING');
+        }
+      }
+      
+      // Check direct executions format: json.default.executions
+      if (defaultData.executions && Array.isArray(defaultData.executions)) {
+        return defaultData.executions.some(exec => exec.state === 'PENDING');
+      }
+
+      return false;
+    };
+
+    // Helper function to get execution ID for polling
+    const getExecutionId = (responseData) => {
+      if (!responseData?.json?.default) {
+        return null;
+      }
+
+      const defaultData = responseData.json.default;
+      
+      // Check data array format: json.default.data[0].id
+      if (defaultData.data && Array.isArray(defaultData.data) && defaultData.data.length > 0) {
+        return defaultData.data[0].id || null;
+      }
+      
+      // Check direct format: json.default.id
+      return defaultData.id || null;
+    };
+
+    // Check if we need to poll (either RUNNING state or has PENDING executions)
+    const needsPolling = 
+      (response.data?.json?.default?.state === 'RUNNING' && response.data.json.default.id) ||
+      (hasPendingExecutions(response.data) && getExecutionId(response.data));
+
+    if (needsPolling) {
+      const executionId = getExecutionId(response.data) || response.data.json.default.id;
       const maxPollAttempts = 100; // Maximum number of polling attempts
       const pollInterval = 5000; // 5 seconds
       let pollAttempts = 0;
       let lastPollResponse = response.data;
 
+      console.log(`[Polling] Starting polling for execution ${executionId}, checking every ${pollInterval}ms`);
+
       while (pollAttempts < maxPollAttempts) {
         // Wait before polling
         await new Promise((resolve) => setTimeout(resolve, pollInterval));
+
+        pollAttempts++;
+        console.log(`[Polling] Attempt ${pollAttempts}/${maxPollAttempts} for execution ${executionId}`);
 
         // Poll for status
         const pollResponse = await client.poll({
@@ -100,6 +150,7 @@ app.post('/api/chat', async (req, res) => {
         });
 
         if (pollResponse.error) {
+          console.error(`[Polling] Error on attempt ${pollAttempts}:`, pollResponse.error);
           return res.status(pollResponse.status || 500).json({ error: pollResponse.error });
         }
 
@@ -107,25 +158,30 @@ app.post('/api/chat', async (req, res) => {
           lastPollResponse = pollResponse.data;
 
           // Check if all executions are complete
-          if (client.checkCompletionStatus(pollResponse.data)) {
+          const isComplete = client.checkCompletionStatus(pollResponse.data);
+          console.log(`[Polling] Attempt ${pollAttempts}: isComplete=${isComplete}`);
+
+          if (isComplete) {
             // All executions are complete, return the final response
+            console.log(`[Polling] All executions complete after ${pollAttempts} attempts`);
             return res.json(pollResponse.data);
           }
 
           // Check if the overall state is ERROR
           if (pollResponse.data.json?.default?.state === 'ERROR') {
+            console.log(`[Polling] Error state detected after ${pollAttempts} attempts`);
             return res.json(pollResponse.data);
           }
         }
-
-        pollAttempts++;
       }
 
       // If we've exhausted polling attempts, return the last response
+      console.warn(`[Polling] Max polling attempts (${maxPollAttempts}) reached, returning last response`);
       return res.json(lastPollResponse);
     }
 
-    // Immediate response (OK or ERROR)
+    // Immediate response (OK or ERROR) with no pending executions
+    console.log('[Polling] No polling needed - immediate response');
     res.json(response.data);
   } catch (error) {
     console.error('Chat error:', error);

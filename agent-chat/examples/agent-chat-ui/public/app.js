@@ -79,10 +79,34 @@ function updateSettingsUI() {
     document.getElementById('tableUploadCacheApiKey').value = settings.tableUploadCacheApiKey || '';
 }
 
+// Helper function to remove trailing slashes from URLs
+function removeTrailingSlash(url) {
+    if (!url || typeof url !== 'string') {
+        return url;
+    }
+    return url.replace(/\/+$/, '');
+}
+
 // Load settings from form
 function loadSettingsFromForm() {
+    // Get raw values
+    const baseUrlRaw = document.getElementById('baseUrl').value || defaultSettings.baseUrl;
+    const socketBaseUrlRaw = document.getElementById('socketBaseUrl').value || defaultSettings.socketBaseUrl;
+    
+    // Remove trailing slashes from URLs
+    const baseUrl = removeTrailingSlash(baseUrlRaw);
+    const socketBaseUrl = removeTrailingSlash(socketBaseUrlRaw);
+    
+    // Update form fields to reflect cleaned values (if they changed)
+    if (baseUrl !== baseUrlRaw) {
+        document.getElementById('baseUrl').value = baseUrl;
+    }
+    if (socketBaseUrl !== socketBaseUrlRaw) {
+        document.getElementById('socketBaseUrl').value = socketBaseUrl;
+    }
+    
     settings = {
-        baseUrl: document.getElementById('baseUrl').value || defaultSettings.baseUrl,
+        baseUrl: baseUrl,
         chatWorkflowId: document.getElementById('chatWorkflowId').value,
         chatWorkflowVersion: document.getElementById('chatWorkflowVersion').value || '0',
         chatApiKey: document.getElementById('chatApiKey').value,
@@ -95,7 +119,7 @@ function loadSettingsFromForm() {
         tableUploadCacheWorkflowId: document.getElementById('tableUploadCacheWorkflowId').value,
         tableUploadCacheVersion: document.getElementById('tableUploadCacheVersion').value || '0',
         tableUploadCacheApiKey: document.getElementById('tableUploadCacheApiKey').value,
-        socketBaseUrl: document.getElementById('socketBaseUrl').value || defaultSettings.socketBaseUrl,
+        socketBaseUrl: socketBaseUrl,
     };
 }
 
@@ -483,6 +507,35 @@ async function sendMessage() {
         // Handle response
         if (data.json && data.json.default) {
             const responseData = data.json.default;
+            
+            // Check for PENDING executions (polling happens server-side)
+            let hasPendingExecutions = false;
+            let pendingCount = 0;
+            
+            // Check data array format: json.default.data[0].executions
+            if (responseData.data && Array.isArray(responseData.data) && responseData.data.length > 0) {
+                const firstDataItem = responseData.data[0];
+                if (firstDataItem.executions && Array.isArray(firstDataItem.executions)) {
+                    const pendingExecs = firstDataItem.executions.filter(exec => exec.state === 'PENDING');
+                    pendingCount = pendingExecs.length;
+                    hasPendingExecutions = pendingCount > 0;
+                }
+            }
+            
+            // Check direct executions format: json.default.executions
+            if (!hasPendingExecutions && responseData.executions && Array.isArray(responseData.executions)) {
+                const pendingExecs = responseData.executions.filter(exec => exec.state === 'PENDING');
+                pendingCount = pendingExecs.length;
+                hasPendingExecutions = pendingCount > 0;
+            }
+            
+            if (hasPendingExecutions) {
+                addDebugLog('info', 'Server-Side Polling', {
+                    message: `Detected ${pendingCount} PENDING execution(s). Server is polling every 5 seconds until all executions complete.`,
+                    pendingCount: pendingCount,
+                    note: 'Polling happens on the server. Final response will be returned when all executions are complete.'
+                });
+            }
             
             // Check for screen responses
             if (responseData.mode === 'SCREEN_RESPONSE' && responseData.screens) {

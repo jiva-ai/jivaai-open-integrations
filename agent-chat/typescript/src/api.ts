@@ -479,6 +479,10 @@ export class JivaApiClient {
       return false;
     }
 
+    this.logger.debug('Checking completion status', {
+      pollResponse,
+    });
+
     const responseData = pollResponse.json.default as PollResponseData & { data?: Array<{ executions?: Array<{ state?: string }> }> };
     
     // Check if there's a data array (newer format: json.default.data[0].executions)
