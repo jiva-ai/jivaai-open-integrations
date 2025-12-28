@@ -103,3 +103,17 @@ agent-chat-ui/
 - WebSocket connections are automatically managed
 - The application handles both immediate responses and async polling
 
+## Polling Behavior
+
+The application automatically polls for conversation results when the backend returns a `RUNNING` state:
+
+- **Initial Poll**: Happens immediately when a `RUNNING` response is received
+- **Subsequent Polls**: Occur every 5 seconds until a terminal state is reached
+- **Terminal States**: Polling stops when the conversation state is:
+  - `OK` - Request completed successfully
+  - `ERROR` - Request failed
+  - `PARTIAL_OK` - Partial results available
+- **Continues Polling**: While the conversation state remains `RUNNING`
+
+The polling logic matches the backend behavior: it checks the conversation state (`json.default.state`) rather than individual execution states, ensuring accurate completion detection.
+

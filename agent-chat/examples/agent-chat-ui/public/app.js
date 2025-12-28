@@ -157,6 +157,28 @@ function maskSensitiveData(obj) {
     return masked;
 }
 
+// Format data as cURL command
+function formatAsCurl(method, url, headers, body, maskedHeaders = {}) {
+    let curl = `curl -X ${method} \\\n  '${url}'`;
+    
+    // Add headers
+    if (headers) {
+        for (const [key, value] of Object.entries(headers)) {
+            const displayValue = maskedHeaders[key] !== undefined ? maskedHeaders[key] : value;
+            // Escape single quotes in header values
+            const escapedValue = String(displayValue).replace(/'/g, "'\\''");
+            curl += ` \\\n  -H '${key}: ${escapedValue}'`;
+        }
+    }
+    
+    // Note: Body will be shown separately for better readability
+    if (body && (method === 'POST' || method === 'PUT' || method === 'PATCH')) {
+        curl += ` \\\n  -d @-  # See Request Body below`;
+    }
+    
+    return curl;
+}
+
 // Add entry to debug log
 function addDebugLog(type, title, data) {
     const entry = document.createElement('div');
@@ -178,9 +200,51 @@ function addDebugLog(type, title, data) {
     let contentText = '';
     if (typeof data === 'string') {
         contentText = data;
-    } else {
-        const masked = maskSensitiveData(data);
-        contentText = JSON.stringify(masked, null, 2);
+    } else if (data && typeof data === 'object') {
+        // Check if this is an API request/response that should be formatted as cURL
+        if (data.method && data.url) {
+            const masked = maskSensitiveData(data);
+            const headers = masked.headers || {};
+            const body = masked.body;
+            
+            // Create masked headers for display
+            const maskedHeaders = {};
+            if (data.headers) {
+                for (const [key, value] of Object.entries(data.headers)) {
+                    const lowerKey = key.toLowerCase();
+                    if (lowerKey.includes('apikey') || lowerKey.includes('api_key') || 
+                        lowerKey.includes('token') || lowerKey.includes('password') ||
+                        lowerKey.includes('secret') || lowerKey.includes('auth')) {
+                        maskedHeaders[key] = '***MASKED***';
+                    } else {
+                        maskedHeaders[key] = value;
+                    }
+                }
+            }
+            
+            contentText = formatAsCurl(data.method, data.url, data.headers, null, maskedHeaders);
+            
+            // Add request body separately for better readability
+            if (body && (data.method === 'POST' || data.method === 'PUT' || data.method === 'PATCH')) {
+                const bodyStr = typeof body === 'string' ? body : JSON.stringify(body, null, 2);
+                contentText += `\n\n# Request Body:\n${bodyStr}`;
+            }
+            
+            // Add response info if available
+            if (data.status || data.statusText) {
+                contentText += `\n\n# Response: ${data.status || ''} ${data.statusText || ''}`;
+            }
+            
+            // Add response data if available
+            if (data.data && type === 'response') {
+                const responseBody = maskSensitiveData(data.data);
+                contentText += `\n\n# Response Body:\n${JSON.stringify(responseBody, null, 2)}`;
+            }
+        } else {
+            // Regular object, format as JSON
+            const masked = maskSensitiveData(data);
+            contentText = JSON.stringify(masked, null, 2);
+        }
     }
     content.textContent = contentText;
     entry.appendChild(content);
@@ -192,6 +256,210 @@ function addDebugLog(type, title, data) {
 // Clear debug log
 function clearDebugLog() {
     debugLog.innerHTML = '';
+}
+
+// Extract conversation state from response (handles both data array and direct formats)
+function getConversationState(response) {
+    if (!response?.json?.default) {
+        return null;
+    }
+
+    const responseData = response.json.default;
+    
+    // Check data array format: json.default.data[0].state
+    if (responseData.data && Array.isArray(responseData.data) && responseData.data.length > 0) {
+        const firstDataItem = responseData.data[0];
+        if (firstDataItem.state) {
+            return firstDataItem.state;
+        }
+    }
+    
+    // Fallback to direct format: json.default.state
+    if (responseData.state) {
+        return responseData.state;
+    }
+    
+    return null;
+}
+
+// Check if conversation is in a terminal state (matches backend logic)
+// Polling should stop when state is OK, ERROR, or PARTIAL_OK
+// Polling should continue when state is RUNNING
+function isTerminalState(pollResponse) {
+    const state = getConversationState(pollResponse);
+    
+    if (!state) {
+        return false;
+    }
+    
+    // Terminal states: OK, ERROR, PARTIAL_OK
+    // Continue polling: RUNNING
+    return state === 'OK' || state === 'ERROR' || state === 'PARTIAL_OK';
+}
+
+// Poll until conversation reaches a terminal state (OK, ERROR, or PARTIAL_OK)
+async function pollUntilComplete(executionId, sessionId) {
+    const maxPollAttempts = 100;
+    const pollInterval = 5000; // 5 seconds
+    let pollAttempts = 0;
+    
+    // Build the actual API URL for logging
+    const apiUrl = `${settings.baseUrl}/${settings.chatWorkflowId}/${settings.chatWorkflowVersion}/invoke`;
+    const pollPayload = {
+        data: {
+            default: [{
+                sessionId: sessionId,
+                id: executionId,
+                mode: 'POLL_REQUEST'
+            }]
+        }
+    };
+
+    while (pollAttempts < maxPollAttempts) {
+        // Wait before polling (except on first attempt - poll immediately)
+        if (pollAttempts > 0) {
+            await new Promise((resolve) => setTimeout(resolve, pollInterval));
+        }
+        
+        pollAttempts++;
+        
+        // Log poll request as cURL
+        addDebugLog('request', `POST Poll (Attempt ${pollAttempts})`, {
+            method: 'POST',
+            url: apiUrl,
+            headers: {
+                'Content-Type': 'application/json',
+                'api-key': settings.chatApiKey
+            },
+            body: pollPayload
+        });
+
+        try {
+            const response = await fetch('/api/poll', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    sessionId: sessionId,
+                    executionId: executionId,
+                    settings: settings,
+                }),
+            });
+
+            const data = await response.json();
+
+            // Log poll response
+            if (response.ok) {
+                addDebugLog('response', `Poll Response ${response.status} (Attempt ${pollAttempts})`, {
+                    method: 'POST',
+                    url: apiUrl,
+                    status: response.status,
+                    statusText: response.statusText,
+                    data: data
+                });
+
+                // Check conversation state (not execution states)
+                // Handles both data array format and direct format
+                const state = getConversationState(data);
+                
+                // Stop polling when we reach a terminal state
+                if (isTerminalState(data)) {
+                    addDebugLog('info', 'Polling Complete - Terminal State Reached', {
+                        message: `Conversation reached terminal state '${state}' after ${pollAttempts} polling attempt(s)`,
+                        state: state,
+                        totalAttempts: pollAttempts
+                    });
+                    
+                    // Extract and display the final message if state is OK
+                    const responseData = data.json?.default;
+                    addDebugLog('info', 'Final Response', responseData);
+                    
+                    let finalMessage = null;
+                    let isOK = false;
+                    
+                    // Check data array format: json.default.data[0].message and json.default.data[0].state
+                    if (responseData.data && Array.isArray(responseData.data) && responseData.data.length > 0) {
+                        const firstDataItem = responseData.data[0];
+                        if (firstDataItem.state === 'OK') {
+                            isOK = true;
+                            finalMessage = firstDataItem.message || null;
+                        }
+                    }
+                    
+                    // Check direct format: json.default.message and json.default.state
+                    if (!isOK && responseData?.state === 'OK') {
+                        isOK = true;
+                        // For poll responses, message might be in logs array
+                        finalMessage = responseData.message || 
+                                      (responseData.logs && responseData.logs.length > 0 
+                                        ? responseData.logs.join('\n') 
+                                        : null);
+                    }
+                    
+                    // Display the message in the chat interface if state is OK and message exists
+                    if (isOK && finalMessage) {
+                        addMessage(finalMessage, 'assistant');
+                    } else if (state === 'ERROR') {
+                        // Display error message
+                        const errorMsg = responseData.logs?.join('\n') || 
+                                       data.errorMessages || 
+                                       'Request failed';
+                        addMessage(`Error: ${errorMsg}`, 'error');
+                    } else if (state === 'PARTIAL_OK') {
+                        // Display partial result message
+                        const partialMsg = responseData.message || 
+                                         (responseData.logs && responseData.logs.length > 0 
+                                           ? responseData.logs.join('\n') 
+                                           : 'Partial results available');
+                        addMessage(partialMsg, 'assistant');
+                    }
+                    
+                    return data;
+                }
+
+                // If still RUNNING, continue polling
+                if (state === 'RUNNING') {
+                    addDebugLog('debug', 'Poll Response Still RUNNING', {
+                        message: `State is still RUNNING, continuing polling (attempt ${pollAttempts})`,
+                        state: state,
+                        attempt: pollAttempts
+                    });
+                    continue;
+                }
+
+                // Unexpected state - log warning and continue
+                addDebugLog('warn', 'Unexpected State in Poll Response', {
+                    message: `Unexpected state '${state}', continuing polling`,
+                    state: state,
+                    attempt: pollAttempts
+                });
+            } else {
+                addDebugLog('error', `Poll Error ${response.status} (Attempt ${pollAttempts})`, {
+                    method: 'POST',
+                    url: apiUrl,
+                    status: response.status,
+                    statusText: response.statusText,
+                    error: data.error || 'Unknown error',
+                    data: data
+                });
+                throw new Error(data.error || 'Polling failed');
+            }
+        } catch (error) {
+            addDebugLog('error', `Poll Exception (Attempt ${pollAttempts})`, {
+                error: error.message,
+                stack: error.stack
+            });
+            throw error;
+        }
+    }
+
+    // Max attempts reached
+    addDebugLog('error', 'Polling Timeout', {
+        message: `Maximum polling attempts (${maxPollAttempts}) reached`,
+        totalAttempts: pollAttempts
+    });
+    throw new Error('Polling timeout: Maximum attempts reached');
 }
 
 // Add message to chat
@@ -241,11 +509,16 @@ async function connectSSE(sessionId) {
         // socketBaseUrl should already include /workflow-chat
         const sseUrl = `${settings.socketBaseUrl}/${settings.chatWorkflowId}/${sessionId}`;
 
-        addDebugLog('websocket', 'SSE Connecting', {
-            url: sseUrl,
+        // Log SSE connection as cURL
+        addDebugLog('websocket', 'POST SSE Connection', {
             method: 'POST',
-            sessionId: sessionId,
-            workflowId: settings.chatWorkflowId
+            url: sseUrl,
+            headers: {
+                'Content-Type': 'application/json',
+                'api-key': settings.chatApiKey,
+                'Accept': 'text/event-stream'
+            },
+            body: {}
         });
 
         const abortController = new AbortController();
@@ -267,18 +540,21 @@ async function connectSSE(sessionId) {
         });
 
         if (!response.ok) {
-            addDebugLog('error', 'SSE Connection Failed', {
+            addDebugLog('error', `SSE Connection Failed ${response.status}`, {
+                method: 'POST',
+                url: sseUrl,
                 status: response.status,
-                statusText: response.statusText,
-                url: sseUrl
+                statusText: response.statusText
             });
             currentSSEConnection = null;
             return;
         }
 
-        addDebugLog('websocket', 'SSE Connected', {
+        addDebugLog('websocket', `SSE Connected ${response.status}`, {
+            method: 'POST',
             url: sseUrl,
-            sessionId: sessionId
+            status: response.status,
+            statusText: response.statusText
         });
 
         let thinkingMessageDiv = null;
@@ -454,17 +730,25 @@ async function sendMessage() {
     // Connect to SSE for real-time updates
     connectSSE(currentSessionId);
 
-    // Log request
+    // Build the actual API URL for logging
+    const apiUrl = `${settings.baseUrl}/${settings.chatWorkflowId}/${settings.chatWorkflowVersion}/invoke`;
     const requestPayload = {
-        message,
-        sessionId: currentSessionId,
-        settings: maskSensitiveData(settings),
+        data: {
+            default: [{
+                sessionId: currentSessionId,
+                message: message,
+                mode: 'CHAT_REQUEST'
+            }]
+        }
     };
-    addDebugLog('request', 'POST /api/chat', {
+
+    // Log request as cURL
+    addDebugLog('request', 'POST Initiate Conversation', {
         method: 'POST',
-        url: '/api/chat',
+        url: apiUrl,
         headers: {
-            'Content-Type': 'application/json'
+            'Content-Type': 'application/json',
+            'api-key': settings.chatApiKey
         },
         body: requestPayload
     });
@@ -486,13 +770,17 @@ async function sendMessage() {
 
         // Log response
         if (response.ok) {
-            addDebugLog('response', `Response ${response.status}`, {
+            addDebugLog('response', `Response ${response.status} ${response.statusText}`, {
+                method: 'POST',
+                url: apiUrl,
                 status: response.status,
                 statusText: response.statusText,
                 data: data
             });
         } else {
-            addDebugLog('error', `Error ${response.status}`, {
+            addDebugLog('error', `Error ${response.status} ${response.statusText}`, {
+                method: 'POST',
+                url: apiUrl,
                 status: response.status,
                 statusText: response.statusText,
                 error: data.error || 'Unknown error',
@@ -508,32 +796,49 @@ async function sendMessage() {
         if (data.json && data.json.default) {
             const responseData = data.json.default;
             
-            // Check for PENDING executions (polling happens server-side)
-            let hasPendingExecutions = false;
-            let pendingCount = 0;
+            // Extract state and executionId (handles both data array and direct formats)
+            let state = null;
+            let executionId = null;
             
-            // Check data array format: json.default.data[0].executions
+            // Check data array format: json.default.data[0].state and json.default.data[0].id
             if (responseData.data && Array.isArray(responseData.data) && responseData.data.length > 0) {
                 const firstDataItem = responseData.data[0];
-                if (firstDataItem.executions && Array.isArray(firstDataItem.executions)) {
-                    const pendingExecs = firstDataItem.executions.filter(exec => exec.state === 'PENDING');
-                    pendingCount = pendingExecs.length;
-                    hasPendingExecutions = pendingCount > 0;
-                }
+                state = firstDataItem.state || null;
+                executionId = firstDataItem.id || null;
             }
             
-            // Check direct executions format: json.default.executions
-            if (!hasPendingExecutions && responseData.executions && Array.isArray(responseData.executions)) {
-                const pendingExecs = responseData.executions.filter(exec => exec.state === 'PENDING');
-                pendingCount = pendingExecs.length;
-                hasPendingExecutions = pendingCount > 0;
+            // Fallback to direct format: json.default.state and json.default.id
+            if (!state) {
+                state = responseData.state || null;
+                executionId = responseData.id || null;
             }
             
-            if (hasPendingExecutions) {
-                addDebugLog('info', 'Server-Side Polling', {
-                    message: `Detected ${pendingCount} PENDING execution(s). Server is polling every 5 seconds until all executions complete.`,
-                    pendingCount: pendingCount,
-                    note: 'Polling happens on the server. Final response will be returned when all executions are complete.'
+            // Log the detected state and executionId for debugging
+            addDebugLog('debug', 'Response State Detection', {
+                state: state,
+                executionId: executionId,
+                hasDataArray: !!(responseData.data && Array.isArray(responseData.data) && responseData.data.length > 0),
+                directState: responseData.state,
+                directId: responseData.id
+            });
+            
+            // Check if we need to poll (state is RUNNING and we have an execution ID)
+            // This matches the backend behavior: when state is RUNNING with an id, we need to poll
+            if (state === 'RUNNING' && executionId) {
+                addDebugLog('info', 'Starting Polling', {
+                    message: `Conversation state is RUNNING with execution ID. Starting polling every 5 seconds.`,
+                    executionId: executionId,
+                    state: state
+                });
+                
+                // Start polling (will poll immediately on first attempt, then every 5 seconds)
+                await pollUntilComplete(executionId, currentSessionId);
+            } else if (state && state !== 'RUNNING') {
+                // Log when we don't start polling because state is not RUNNING
+                addDebugLog('info', 'Skipping Polling', {
+                    message: `Conversation state is '${state}', not RUNNING. Polling not needed.`,
+                    state: state,
+                    executionId: executionId
                 });
             }
             
