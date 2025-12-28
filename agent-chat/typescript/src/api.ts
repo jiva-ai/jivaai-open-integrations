@@ -329,7 +329,10 @@ export class JivaApiClient {
     const pollInterval = options.pollInterval || 1000;
 
     for (let attempt = 0; attempt < maxAttempts; attempt++) {
-      await new Promise((resolve) => setTimeout(resolve, pollInterval));
+      // Wait before polling (except on first attempt - poll immediately)
+      if (attempt > 0) {
+        await new Promise((resolve) => setTimeout(resolve, pollInterval));
+      }
 
       const pollRequest: PollRequest = {
         sessionId,
@@ -365,7 +368,15 @@ export class JivaApiClient {
       }
 
       const state = response.data?.json?.default?.state;
+      
+      // Stop polling when we reach a terminal state
       if (state === 'OK' || state === 'ERROR' || state === 'PARTIAL_OK') {
+        this.logger.info('Polling completed - terminal state reached', {
+          sessionId,
+          executionId,
+          state,
+          attempt: attempt + 1,
+        });
         return response;
       }
 
@@ -378,6 +389,15 @@ export class JivaApiClient {
         });
         continue;
       }
+
+      // If state is undefined or unexpected, log warning and continue
+      // (This shouldn't happen, but we'll handle it gracefully)
+      this.logger.warn('Unexpected state in poll response, continuing', {
+        sessionId,
+        executionId,
+        state,
+        attempt: attempt + 1,
+      });
     }
 
     this.logger.warn('Polling timeout reached', {
