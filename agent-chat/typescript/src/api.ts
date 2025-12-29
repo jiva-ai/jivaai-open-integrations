@@ -138,8 +138,7 @@ async function makeRequest<T = unknown>(
     url,
     workflowId: targetWorkflowId,
     version: targetVersion,
-    hasPayload: !!payload,
-    payloadSize: payload ? JSON.stringify(payload).length : 0,
+    payload: payload || undefined,
   });
 
   try {
@@ -174,12 +173,13 @@ async function makeRequest<T = unknown>(
             url,
             status,
             error,
+            responseData: data,
           });
         } else {
           logger?.debug('Request completed successfully', {
             url,
             status,
-            hasData: !!data,
+            responseData: data,
           });
         }
       } catch (parseError) {
@@ -453,6 +453,7 @@ export class JivaApiClient {
     this.logger.debug('Making poll request', {
       sessionId: request.sessionId,
       id: request.id,
+      payload: payload,
     });
     const response = await makeRequest<PollResponse>(
       this.config,
@@ -477,6 +478,7 @@ export class JivaApiClient {
         sessionId: request.sessionId,
         id: request.id,
         state: response.data.json?.default?.state,
+        responseData: response.data,
       });
       onSuccess?.(response.data, response.status);
     }

@@ -235,10 +235,15 @@ function addDebugLog(type, title, data) {
                 contentText += `\n\n# Response: ${data.status || ''} ${data.statusText || ''}`;
             }
             
-            // Add response data if available
-            if (data.data && type === 'response') {
+            // Add response data if available (for both response and error types)
+            if (data.data && (type === 'response' || type === 'error')) {
                 const responseBody = maskSensitiveData(data.data);
                 contentText += `\n\n# Response Body:\n${JSON.stringify(responseBody, null, 2)}`;
+            }
+            
+            // Also show error field if present (for error types)
+            if (data.error && type === 'error') {
+                contentText += `\n\n# Error: ${data.error}`;
             }
         } else {
             // Regular object, format as JSON
