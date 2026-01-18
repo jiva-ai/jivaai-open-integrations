@@ -477,7 +477,6 @@ export class JivaApiClient {
       this.logger.debug('Poll request successful', {
         sessionId: request.sessionId,
         id: request.id,
-        state: response.data.json?.default?.state,
         responseData: response.data,
       });
       onSuccess?.(response.data, response.status);
