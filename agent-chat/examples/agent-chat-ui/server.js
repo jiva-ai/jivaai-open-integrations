@@ -16,7 +16,8 @@ const portArg = process.argv[2];
 const PORT = (portArg && /^\d+$/.test(portArg) ? parseInt(portArg, 10) : null) ?? process.env.PORT ?? 3000;
 
 app.use(cors());
-app.use(express.json());
+// Increase JSON body size limit to support base64-encoded uploads
+app.use(express.json({ limit: '10mb' }));
 app.use(express.static(join(__dirname, 'public')));
 
 // Store client instances per session (in production, use proper session management)
@@ -58,7 +59,7 @@ function getClient(settings) {
  */
 app.post('/api/chat', async (req, res) => {
   try {
-    const { message, sessionId, settings } = req.body;
+    const { message, sessionId, settings, mode, nodeId, field, assetId } = req.body;
 
     if (!message || !sessionId) {
       return res.status(400).json({ error: 'message and sessionId are required' });
@@ -70,12 +71,24 @@ app.post('/api/chat', async (req, res) => {
 
     const client = getClient(settings);
 
-    // Initiate conversation
-    const response = await client.initiateConversation({
+    const conversationRequest = {
       sessionId,
       message,
-      mode: 'CHAT_REQUEST',
-    });
+      mode: mode || 'CHAT_REQUEST',
+    };
+
+    if (nodeId) {
+      conversationRequest.nodeId = nodeId;
+    }
+    if (field) {
+      conversationRequest.field = field;
+    }
+    if (assetId) {
+      conversationRequest.assetId = assetId;
+    }
+
+    // Initiate conversation
+    const response = await client.initiateConversation(conversationRequest);
 
     if (response.error) {
       return res.status(response.status || 500).json({ error: response.error });

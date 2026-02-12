@@ -467,13 +467,316 @@ async function pollUntilComplete(executionId, sessionId) {
     throw new Error('Polling timeout: Maximum attempts reached');
 }
 
+// Global state for pending screen interactions (e.g. text responses)
+let pendingTextScreen = null;
+
+// Helper: convert File to base64 string
+function fileToBase64(file) {
+    return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => {
+            const result = reader.result;
+            if (typeof result === 'string') {
+                // Strip any data URL prefix if present
+                const base64 = result.includes(',') ? result.split(',')[1] : result;
+                resolve(base64);
+            } else {
+                reject(new Error('Unexpected FileReader result type'));
+            }
+        };
+        reader.onerror = () => reject(reader.error || new Error('Failed to read file'));
+        reader.readAsDataURL(file);
+    });
+}
+
+// Helper: determine screen container (supports both direct and data[0] formats)
+function getScreenContainer(responseData) {
+    if (!responseData) {
+        return null;
+    }
+
+    // Direct format: json.default.mode / json.default.screens
+    if (responseData.mode === 'SCREEN_RESPONSE' && Array.isArray(responseData.screens) && responseData.screens.length > 0) {
+        return responseData;
+    }
+
+    // Array format: json.default.data[0].mode / json.default.data[0].screens
+    if (responseData.data && Array.isArray(responseData.data) && responseData.data.length > 0) {
+        const firstDataItem = responseData.data[0];
+        if (firstDataItem && firstDataItem.mode === 'SCREEN_RESPONSE' && Array.isArray(firstDataItem.screens) && firstDataItem.screens.length > 0) {
+            return firstDataItem;
+        }
+    }
+
+    return null;
+}
+
+// Helper: normalize screen object (handles asset vs assets)
+function normalizeScreen(rawScreen) {
+    if (!rawScreen) {
+        return null;
+    }
+
+    const asset = rawScreen.asset || rawScreen.assets || null;
+    if (!asset) {
+        return null;
+    }
+
+    return {
+        nodeId: rawScreen.nodeId,
+        field: rawScreen.field,
+        asset: {
+            type: asset.type,
+            message: asset.message
+        }
+    };
+}
+
+// Helper: classify screen type (file / text / table)
+function getScreenType(assetType) {
+    const type = (assetType || '').toUpperCase();
+    if (type.includes('TABLE')) {
+        return 'table';
+    }
+    if (type.includes('TEXT')) {
+        return 'text';
+    }
+    // Default / FILE_POINTER_URL / FILE_UPLOAD
+    return 'file';
+}
+
+// Handle a SCREEN_RESPONSE from the conversation API
+async function handleScreenResponse(responseData) {
+    const screenContainer = getScreenContainer(responseData);
+    if (!screenContainer) {
+        return;
+    }
+
+    const firstScreen = normalizeScreen(screenContainer.screens[0]);
+    if (!firstScreen || !firstScreen.asset) {
+        addDebugLog('warn', 'Screen response without valid asset', screenContainer);
+        return;
+    }
+
+    const { nodeId, field, asset } = firstScreen;
+    const screenType = getScreenType(asset.type);
+
+    // Common explanatory message
+    const baseMessage = asset.message || 'The agent requires additional input.';
+
+    if (!nodeId || !field) {
+        addMessage(`Screen response received but nodeId/field are missing. Message: ${baseMessage}`, 'error');
+        addDebugLog('error', 'Screen response missing nodeId or field', firstScreen);
+        return;
+    }
+
+    if (screenType === 'file') {
+        // 1. Asking for a file
+        const messageDiv = addMessage(
+            `The agent needs a file to proceed:\n\n${baseMessage}\n\nPlease click the button below to upload a file.`,
+            'assistant'
+        );
+
+        const textDiv = messageDiv.querySelector('div:first-child');
+        if (textDiv) {
+            const button = document.createElement('button');
+            button.textContent = 'Upload file';
+            button.className = 'upload-button';
+            button.style.marginTop = '8px';
+
+            button.addEventListener('click', () => {
+                // Create a temporary hidden file input to trigger the file picker
+                const fileInput = document.createElement('input');
+                fileInput.type = 'file';
+                fileInput.style.display = 'none';
+                document.body.appendChild(fileInput);
+
+                fileInput.addEventListener('change', async () => {
+                    const file = fileInput.files && fileInput.files[0];
+                    document.body.removeChild(fileInput);
+
+                    if (!file) {
+                        addMessage('No file selected. The agent still requires a file to continue.', 'error');
+                        return;
+                    }
+
+                    try {
+                        // Show the selected file in chat as a user message
+                        addMessage(`Selected file: ${file.name}`, 'user');
+
+                        const base64Content = await fileToBase64(file);
+
+                        // Upload file via backend (/api/upload/file)
+                        addDebugLog('request', 'POST Upload File', {
+                            method: 'POST',
+                            url: '/api/upload/file',
+                            headers: { 'Content-Type': 'application/json' },
+                        });
+
+                        const uploadResponse = await fetch('/api/upload/file', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                                file: base64Content,
+                                settings,
+                            }),
+                        });
+
+                        const uploadData = await uploadResponse.json();
+
+                        if (!uploadResponse.ok) {
+                            const errorMsg = uploadData.error || 'File upload failed';
+                            addDebugLog('error', `Upload File Error ${uploadResponse.status}`, {
+                                status: uploadResponse.status,
+                                statusText: uploadResponse.statusText,
+                                error: errorMsg,
+                                data: uploadData,
+                            });
+                            addMessage(`Error uploading file: ${errorMsg}`, 'error');
+                            return;
+                        }
+
+                        addDebugLog('response', `Upload File Response ${uploadResponse.status}`, {
+                            status: uploadResponse.status,
+                            statusText: uploadResponse.statusText,
+                            data: uploadData,
+                        });
+
+                        const assetId = uploadData?.strings?.default;
+                        if (!assetId) {
+                            addMessage('Upload succeeded but no assetId was returned.', 'error');
+                            addDebugLog('error', 'Upload response missing assetId', uploadData);
+                            return;
+                        }
+
+                        // Send follow-up conversation message satisfying the screen
+                        addDebugLog('info', 'Sending follow-up message to satisfy file screen', {
+                            nodeId,
+                            field,
+                            assetId,
+                        });
+
+                        // Reuse SSE for follow-up
+                        connectSSE(currentSessionId);
+
+                        const apiUrl = `${settings.baseUrl}/${settings.chatWorkflowId}/${settings.chatWorkflowVersion}/invoke`;
+                        const followUpPayload = {
+                            data: {
+                                default: [{
+                                    sessionId: currentSessionId,
+                                    message: `Providing requested file: ${file.name}`,
+                                    mode: 'CHAT_REQUEST',
+                                    nodeId,
+                                    field,
+                                    assetId,
+                                }],
+                            },
+                        };
+
+                        // Log follow-up request as cURL
+                        addDebugLog('request', 'POST Satisfy File Screen', {
+                            method: 'POST',
+                            url: apiUrl,
+                            headers: {
+                                'Content-Type': 'application/json',
+                                'api-key': settings.chatApiKey,
+                            },
+                            body: followUpPayload,
+                        });
+
+                        const followUpResponse = await fetch('/api/chat', {
+                            method: 'POST',
+                            headers: {
+                                'Content-Type': 'application/json',
+                            },
+                            body: JSON.stringify({
+                                message: `Providing requested file: ${file.name}`,
+                                sessionId: currentSessionId,
+                                settings,
+                                nodeId,
+                                field,
+                                assetId,
+                            }),
+                        });
+
+                        const followUpData = await followUpResponse.json();
+
+                        if (!followUpResponse.ok) {
+                            addDebugLog('error', `Satisfy File Screen Error ${followUpResponse.status}`, {
+                                status: followUpResponse.status,
+                                statusText: followUpResponse.statusText,
+                                error: followUpData.error || 'Unknown error',
+                                data: followUpData,
+                            });
+                            addMessage(`Error sending follow-up message: ${followUpData.error || 'Unknown error'}`, 'error');
+                            return;
+                        }
+
+                        addDebugLog('response', `Satisfy File Screen Response ${followUpResponse.status}`, {
+                            status: followUpResponse.status,
+                            statusText: followUpResponse.statusText,
+                            data: followUpData,
+                        });
+
+                        // Process follow-up response using the same logic as initial responses
+                        handleConversationResponse(followUpData);
+                    } catch (error) {
+                        console.error('Error handling file screen response:', error);
+                        addDebugLog('error', 'File Screen Handling Error', {
+                            error: error.message,
+                            stack: error.stack,
+                        });
+                        addMessage(`Error handling file upload: ${error.message}`, 'error');
+                    }
+                });
+
+                // Trigger file dialog
+                fileInput.click();
+            });
+
+            textDiv.appendChild(document.createElement('br'));
+            textDiv.appendChild(button);
+        }
+    } else if (screenType === 'text') {
+        // 2. Asking for text
+        pendingTextScreen = { nodeId, field };
+        addMessage(
+            `The agent needs some text input to proceed:\n\n${baseMessage}\n\nPlease type your response in the chat box. Your next message will be used to satisfy this request.`,
+            'assistant'
+        );
+    } else if (screenType === 'table') {
+        // 3. Asking for a table format (not implemented)
+        addMessage('Table screen response is not implemented yet.', 'assistant');
+    }
+}
+
+// Helper: render text as either plain text or markdown HTML
+function renderMessageContent(container, text, isAssistant) {
+    // For assistant messages, treat content as Markdown and render as HTML
+    if (isAssistant && window.marked && window.DOMPurify) {
+        try {
+            const rawHtml = window.marked.parse(text || '');
+            const safeHtml = window.DOMPurify.sanitize(rawHtml, {
+                ALLOWED_ATTR: ['href', 'title', 'target', 'rel'],
+            });
+            container.innerHTML = safeHtml;
+            return;
+        } catch (e) {
+            console.error('Markdown render error, falling back to plain text:', e);
+        }
+    }
+
+    // Fallback / non-assistant: plain text
+    container.textContent = text;
+}
+
 // Add message to chat
 function addMessage(text, type = 'assistant', timestamp = new Date()) {
     const messageDiv = document.createElement('div');
     messageDiv.className = `message ${type}`;
     
     const textDiv = document.createElement('div');
-    textDiv.textContent = text;
+    renderMessageContent(textDiv, text, type === 'assistant');
     messageDiv.appendChild(textDiv);
     
     const timeDiv = document.createElement('div');
@@ -491,7 +794,8 @@ function addMessage(text, type = 'assistant', timestamp = new Date()) {
 function updateMessage(messageDiv, text) {
     const textDiv = messageDiv.querySelector('div:first-child');
     if (textDiv) {
-        textDiv.textContent = text;
+        const isAssistant = messageDiv.classList.contains('assistant');
+        renderMessageContent(textDiv, text, isAssistant);
     }
     messagesContainer.scrollTop = messagesContainer.scrollHeight;
 }
@@ -877,6 +1181,142 @@ async function sendMessage() {
     addMessage(message, 'user');
     messageInput.value = '';
 
+    // If we have a pending text screen, treat this message as the text content to upload
+    if (pendingTextScreen) {
+        const { nodeId, field } = pendingTextScreen;
+        pendingTextScreen = null;
+
+        try {
+            // Upload text via backend (/api/upload/text)
+            addDebugLog('request', 'POST Upload Text', {
+                method: 'POST',
+                url: '/api/upload/text',
+                headers: { 'Content-Type': 'application/json' },
+            });
+
+            const uploadResponse = await fetch('/api/upload/text', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    text: message,
+                    settings,
+                }),
+            });
+
+            const uploadData = await uploadResponse.json();
+
+            if (!uploadResponse.ok) {
+                const errorMsg = uploadData.error || 'Text upload failed';
+                addDebugLog('error', `Upload Text Error ${uploadResponse.status}`, {
+                    status: uploadResponse.status,
+                    statusText: uploadResponse.statusText,
+                    error: errorMsg,
+                    data: uploadData,
+                });
+                addMessage(`Error uploading text: ${errorMsg}`, 'error');
+                return;
+            }
+
+            addDebugLog('response', `Upload Text Response ${uploadResponse.status}`, {
+                status: uploadResponse.status,
+                statusText: uploadResponse.statusText,
+                data: uploadData,
+            });
+
+            const assetId = uploadData?.strings?.default;
+            if (!assetId) {
+                addMessage('Upload succeeded but no assetId was returned.', 'error');
+                addDebugLog('error', 'Text upload response missing assetId', uploadData);
+                return;
+            }
+
+            // Send follow-up conversation message satisfying the screen
+            addDebugLog('info', 'Sending follow-up message to satisfy text screen', {
+                nodeId,
+                field,
+                assetId,
+            });
+
+            // Ensure SSE connection for follow-up
+            connectSSE(currentSessionId);
+
+            const apiUrl = `${settings.baseUrl}/${settings.chatWorkflowId}/${settings.chatWorkflowVersion}/invoke`;
+            const followUpPayload = {
+                data: {
+                    default: [{
+                        sessionId: currentSessionId,
+                        message,
+                        mode: 'CHAT_REQUEST',
+                        nodeId,
+                        field,
+                        assetId,
+                    }],
+                },
+            };
+
+            addDebugLog('request', 'POST Satisfy Text Screen', {
+                method: 'POST',
+                url: apiUrl,
+                headers: {
+                    'Content-Type': 'application/json',
+                    'api-key': settings.chatApiKey,
+                },
+                body: followUpPayload,
+            });
+
+            const followUpResponse = await fetch('/api/chat', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    message,
+                    sessionId: currentSessionId,
+                    settings,
+                    nodeId,
+                    field,
+                    assetId,
+                }),
+            });
+
+            const followUpData = await followUpResponse.json();
+
+            if (!followUpResponse.ok) {
+                addDebugLog('error', `Satisfy Text Screen Error ${followUpResponse.status}`, {
+                    status: followUpResponse.status,
+                    statusText: followUpResponse.statusText,
+                    error: followUpData.error || 'Unknown error',
+                    data: followUpData,
+                });
+                addMessage(`Error sending follow-up message: ${followUpData.error || 'Unknown error'}`, 'error');
+                return;
+            }
+
+            addDebugLog('response', `Satisfy Text Screen Response ${followUpResponse.status}`, {
+                status: followUpResponse.status,
+                statusText: followUpResponse.statusText,
+                data: followUpData,
+            });
+
+            // Process follow-up response using the same logic as initial responses
+            handleConversationResponse(followUpData);
+            return;
+        } catch (error) {
+            console.error('Error handling text screen response:', error);
+            addDebugLog('error', 'Text Screen Handling Error', {
+                error: error.message,
+                stack: error.stack,
+            });
+            addMessage(`Error handling text response: ${error.message}`, 'error');
+            return;
+        } finally {
+            // Re-enable input
+            sendBtn.disabled = false;
+            messageInput.disabled = false;
+            messageInput.focus();
+        }
+    }
+
     // Connect to SSE for real-time updates
     // NOTE: Connection is established BEFORE sending chat request
     addDebugLog('info', 'Initiating SSE Connection Before Chat Request', {
@@ -949,79 +1389,7 @@ async function sendMessage() {
         }
 
         // Handle response
-        if (data.json && data.json.default) {
-            const responseData = data.json.default;
-            
-            // Extract state and executionId (handles both data array and direct formats)
-            let state = null;
-            let executionId = null;
-            
-            // Check data array format: json.default.data[0].state and json.default.data[0].id
-            if (responseData.data && Array.isArray(responseData.data) && responseData.data.length > 0) {
-                const firstDataItem = responseData.data[0];
-                state = firstDataItem.state || null;
-                executionId = firstDataItem.id || null;
-            }
-            
-            // Fallback to direct format: json.default.state and json.default.id
-            if (!state) {
-                state = responseData.state || null;
-                executionId = responseData.id || null;
-            }
-            
-            // Log the detected state and executionId for debugging
-            addDebugLog('debug', 'Response State Detection', {
-                state: state,
-                executionId: executionId,
-                hasDataArray: !!(responseData.data && Array.isArray(responseData.data) && responseData.data.length > 0),
-                directState: responseData.state,
-                directId: responseData.id
-            });
-            
-            // Check if we need to poll (state is RUNNING and we have an execution ID)
-            // This matches the backend behavior: when state is RUNNING with an id, we need to poll
-            if (state === 'RUNNING' && executionId) {
-                addDebugLog('info', 'Starting Polling', {
-                    message: `Conversation state is RUNNING with execution ID. Starting polling every 5 seconds.`,
-                    executionId: executionId,
-                    state: state
-                });
-                
-                // Start polling (will poll immediately on first attempt, then every 5 seconds)
-                await pollUntilComplete(executionId, currentSessionId);
-            } else if (state && state !== 'RUNNING') {
-                // Log when we don't start polling because state is not RUNNING
-                addDebugLog('info', 'Skipping Polling', {
-                    message: `Conversation state is '${state}', not RUNNING. Polling not needed.`,
-                    state: state,
-                    executionId: executionId
-                });
-            }
-            
-            // Check for screen responses
-            if (responseData.mode === 'SCREEN_RESPONSE' && responseData.screens) {
-                const screen = responseData.screens[0];
-                addMessage(
-                    `Screen response: ${screen.asset.message} (Type: ${screen.asset.type})`,
-                    'assistant'
-                );
-            } else if (responseData.message) {
-                // Regular response - SSE should have already handled it
-                // But add it here as fallback if SSE didn't work
-                if (!currentSSEConnection) {
-                    addMessage(responseData.message, 'assistant');
-                }
-            }
-
-            // Show executions if any
-            if (responseData.executions && responseData.executions.length > 0) {
-                responseData.executions.forEach((exec) => {
-                    if (exec.response) {
-                        addMessage(`Execution: ${exec.response} (${exec.type})`, 'assistant');
-                    }
-                });
-            }
-        }
+        handleConversationResponse(data);
     } catch (error) {
         console.error('Chat error:', error);
         addDebugLog('error', 'Request Exception', {
@@ -1034,6 +1402,85 @@ async function sendMessage() {
         sendBtn.disabled = false;
         messageInput.disabled = false;
         messageInput.focus();
+    }
+}
+
+// Shared handler for conversation responses (initial and follow-up)
+function handleConversationResponse(data) {
+    if (!data || !data.json || !data.json.default) {
+        return;
+    }
+
+    const responseData = data.json.default;
+
+    // Extract state and executionId (handles both data array and direct formats)
+    let state = null;
+    let executionId = null;
+
+    // Check data array format: json.default.data[0].state and json.default.data[0].id
+    if (responseData.data && Array.isArray(responseData.data) && responseData.data.length > 0) {
+        const firstDataItem = responseData.data[0];
+        state = firstDataItem.state || null;
+        executionId = firstDataItem.id || null;
+    }
+
+    // Fallback to direct format: json.default.state and json.default.id
+    if (!state) {
+        state = responseData.state || null;
+        executionId = responseData.id || null;
+    }
+
+    // Log the detected state and executionId for debugging
+    addDebugLog('debug', 'Response State Detection', {
+        state: state,
+        executionId: executionId,
+        hasDataArray: !!(responseData.data && Array.isArray(responseData.data) && responseData.data.length > 0),
+        directState: responseData.state,
+        directId: responseData.id
+    });
+
+    // Check if we need to poll (state is RUNNING and we have an execution ID)
+    // This matches the backend behavior: when state is RUNNING with an id, we need to poll
+    if (state === 'RUNNING' && executionId) {
+        addDebugLog('info', 'Starting Polling', {
+            message: `Conversation state is RUNNING with execution ID. Starting polling every 5 seconds.`,
+            executionId: executionId,
+            state: state
+        });
+
+        // Start polling (will poll immediately on first attempt, then every 5 seconds)
+        pollUntilComplete(executionId, currentSessionId);
+    } else if (state && state !== 'RUNNING') {
+        // Log when we don't start polling because state is not RUNNING
+        addDebugLog('info', 'Skipping Polling', {
+            message: `Conversation state is '${state}', not RUNNING. Polling not needed.`,
+            state: state,
+            executionId: executionId
+        });
+    }
+
+    // Handle screen responses (supports both direct and data[0] formats)
+    handleScreenResponse(responseData);
+
+    // If not a screen response, fall back to message/executions handling
+    const screenContainer = getScreenContainer(responseData);
+    if (!screenContainer) {
+        if (responseData.message) {
+            // Regular response - SSE should have already handled it
+            // But add it here as fallback if SSE didn't work
+            if (!currentSSEConnection) {
+                addMessage(responseData.message, 'assistant');
+            }
+        }
+
+        // Show executions if any
+        if (responseData.executions && responseData.executions.length > 0) {
+            responseData.executions.forEach((exec) => {
+                if (exec.response) {
+                    addMessage(`Execution: ${exec.response} (${exec.type})`, 'assistant');
+                }
+            });
+        }
     }
 }
 
