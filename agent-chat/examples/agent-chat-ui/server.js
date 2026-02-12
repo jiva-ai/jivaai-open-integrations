@@ -12,7 +12,8 @@ const sdkPath = join(__dirname, '..', '..', 'typescript', 'dist', 'index.js');
 const { JivaApiClient } = require(sdkPath);
 
 const app = express();
-const PORT = process.env.PORT || 3000;
+const portArg = process.argv[2];
+const PORT = (portArg && /^\d+$/.test(portArg) ? parseInt(portArg, 10) : null) ?? process.env.PORT ?? 3000;
 
 app.use(cors());
 app.use(express.json());
