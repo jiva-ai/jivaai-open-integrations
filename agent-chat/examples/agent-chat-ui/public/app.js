@@ -21,6 +21,8 @@ const defaultSettings = {
 let settings = { ...defaultSettings };
 let currentSessionId = `session-${Date.now()}`;
 let currentSSEConnection = null;
+/** Session id for the active SSE connection; reuse connection when same session to avoid aborting mid-stream */
+let currentSSESessionId = null;
 
 // DOM elements
 const messagesContainer = document.getElementById('messages');
@@ -668,8 +670,10 @@ async function handleScreenResponse(responseData) {
                             assetId,
                         });
 
-                        // Reuse SSE for follow-up
-                        connectSSE(currentSessionId);
+                        // Reuse SSE for follow-up (only open new if no connection or different session)
+                        if (!currentSSEConnection || currentSSESessionId !== currentSessionId) {
+                            connectSSE(currentSessionId);
+                        }
 
                         const apiUrl = `${settings.baseUrl}/${settings.chatWorkflowId}/${settings.chatWorkflowVersion}/invoke`;
                         const followUpPayload = {
@@ -820,13 +824,15 @@ async function connectSSE(sessionId) {
         socketBaseUrl: settings.socketBaseUrl
     });
 
-    // Close existing connection
+    // Close existing connection only if different session or intentional replace
     if (currentSSEConnection) {
         addDebugLog('info', 'Closing Existing SSE Connection', {
-            sessionId: sessionId
+            sessionId: sessionId,
+            previousSessionId: currentSSESessionId
         });
         currentSSEConnection.abort();
         currentSSEConnection = null;
+        currentSSESessionId = null;
     }
 
     if (!settings.chatWorkflowId || !settings.socketBaseUrl || !settings.chatApiKey) {
@@ -901,9 +907,11 @@ async function connectSSE(sessionId) {
                 sessionId: sessionId
             });
             currentSSEConnection = null;
+            currentSSESessionId = null;
             return;
         }
 
+        currentSSESessionId = sessionId;
         addDebugLog('info', `SSE HTTP Connection Established ${response.status}`, {
             method: 'POST',
             url: sseUrl,
@@ -1011,6 +1019,7 @@ async function connectSSE(sessionId) {
                         bufferRemaining: buffer.length
                     });
                     currentSSEConnection = null;
+                    currentSSESessionId = null;
                     break;
                 }
 
@@ -1168,6 +1177,7 @@ async function connectSSE(sessionId) {
             });
         }
         currentSSEConnection = null;
+        currentSSESessionId = null;
     }
 }
 
@@ -1249,8 +1259,10 @@ async function sendMessage() {
                 assetId,
             });
 
-            // Ensure SSE connection for follow-up
-            connectSSE(currentSessionId);
+            // Ensure SSE connection for follow-up (reuse existing for same session)
+            if (!currentSSEConnection || currentSSESessionId !== currentSessionId) {
+                connectSSE(currentSessionId);
+            }
 
             const apiUrl = `${settings.baseUrl}/${settings.chatWorkflowId}/${settings.chatWorkflowVersion}/invoke`;
             const followUpPayload = {
@@ -1329,14 +1341,20 @@ async function sendMessage() {
         }
     }
 
-    // Connect to SSE for real-time updates
-    // NOTE: Connection is established BEFORE sending chat request
-    addDebugLog('info', 'Initiating SSE Connection Before Chat Request', {
-        sessionId: currentSessionId,
-        timestamp: new Date().toISOString(),
-        note: 'SSE connection will be established, then chat request will be sent'
-    });
-    connectSSE(currentSessionId);
+    // Connect to SSE for real-time updates (reuse existing connection for same session to avoid aborting mid-stream)
+    const needSSE = !currentSSEConnection || currentSSESessionId !== currentSessionId;
+    if (needSSE) {
+        addDebugLog('info', 'Initiating SSE Connection Before Chat Request', {
+            sessionId: currentSessionId,
+            timestamp: new Date().toISOString(),
+            note: 'SSE connection will be established, then chat request will be sent'
+        });
+        connectSSE(currentSessionId);
+    } else {
+        addDebugLog('info', 'Reusing existing SSE connection for same session', {
+            sessionId: currentSessionId
+        });
+    }
 
     // Build the actual API URL for logging
     const apiUrl = `${settings.baseUrl}/${settings.chatWorkflowId}/${settings.chatWorkflowVersion}/invoke`;
