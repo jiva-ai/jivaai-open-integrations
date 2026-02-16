@@ -535,14 +535,26 @@ function normalizeScreen(rawScreen) {
 // Helper: classify screen type (file / text / table)
 function getScreenType(assetType) {
     const type = (assetType || '').toUpperCase();
+    addDebugLog('debug', 'Asset type', {
+        assetType: assetType,
+        type: type
+    });
+
+    // Treat FILE_POINTER_URL as a text-based screen so the user
+    // is asked to provide a URL (handled by the text upload flow)
+    if (type.includes('FILE_POINTER_URL')) {
+        return 'text';
+    }
     if (type.includes('TABLE')) {
         return 'table';
     }
     if (type.includes('TEXT')) {
         return 'text';
     }
-    // Default / FILE_POINTER_URL / FILE_UPLOAD
-    return 'file';
+    if (type.includes('FILE')) {
+        return 'file';
+    }
+    throw new Error(`Unsupported asset type: ${type}`);
 }
 
 // Handle a SCREEN_RESPONSE from the conversation API
@@ -573,7 +585,7 @@ async function handleScreenResponse(responseData) {
     if (screenType === 'file') {
         // 1. Asking for a file
         const messageDiv = addMessage(
-            `The agent needs a file to proceed:\n\n${baseMessage}\n\nPlease click the button below to upload a file.`,
+            `The agent needs a file to proceed:\n\n${baseMessage}`,
             'assistant'
         );
 
