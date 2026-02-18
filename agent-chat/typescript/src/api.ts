@@ -152,7 +152,9 @@ async function makeRequest<T = unknown>(
       try {
         const jsonData = await response.json();
         data = jsonData as T;
-        
+
+        logger?.debug('[raw] API response', JSON.stringify(data));
+
         // Check for errorMessages in successful responses
         // Note: We don't clear data here because the caller may need to inspect the full response
         // even when errorMessages is present (e.g., to check json.default.state)
@@ -193,6 +195,7 @@ async function makeRequest<T = unknown>(
     } else {
       try {
         const errorData = await response.json() as Record<string, unknown>;
+        logger?.debug('[raw] API response', JSON.stringify(errorData));
         const errorObj = errorData as { error?: string; message?: string; errorMessages?: string | null };
         error = errorObj.error || errorObj.message || 
                 (typeof errorObj.errorMessages === 'string' ? errorObj.errorMessages : null) || 
@@ -1244,6 +1247,7 @@ export class JivaApiClient {
                 }
 
                 const message: SocketMessage = JSON.parse(eventData);
+                this.logger.debug('[raw] Socket message', eventData);
                 this.logger.debug('SSE message received', {
                   sessionId,
                   messageTypes: message.types,
