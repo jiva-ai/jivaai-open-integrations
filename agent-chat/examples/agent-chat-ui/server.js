@@ -23,10 +23,6 @@ app.use(express.static(join(__dirname, 'public')));
 // Store client instances per session (in production, use proper session management)
 const clients = new Map();
 
-// Track server-side SSE subscriptions so the SDK runs subscribeToSocket and logs socket messages to stdout.
-// Key: same as clients (JSON.stringify(settings)); value: Set of sessionIds we've subscribed for.
-const socketSubscriptions = new Map();
-
 /**
  * Get or create a JivaApiClient instance based on settings
  */
@@ -91,19 +87,7 @@ app.post('/api/chat', async (req, res) => {
       conversationRequest.assetId = assetId;
     }
 
-    // Subscribe via SDK before initiating so socket messages are logged to stdout.
-    const clientKey = JSON.stringify(settings);
-    if (!socketSubscriptions.has(clientKey)) {
-      socketSubscriptions.set(clientKey, new Set());
-    }
-    if (!socketSubscriptions.get(clientKey).has(sessionId)) {
-      socketSubscriptions.get(clientKey).add(sessionId);
-      client.subscribeToSocket(sessionId, {
-        onMessage: () => { /* SDK logs to stdout via logger.debug */ },
-      });
-    }
-
-    // Initiate conversation (after subscribe so server connection is ready for events)
+    // Initiate conversation
     const response = await client.initiateConversation(conversationRequest);
 
     if (response.error) {
