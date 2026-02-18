@@ -181,6 +181,32 @@ function formatAsCurl(method, url, headers, body, maskedHeaders = {}) {
     return curl;
 }
 
+// Expand string values that are JSON so debug log shows raw JSON (no escaped quotes)
+function expandJsonStringsForDisplay(obj) {
+    if (typeof obj === 'string') {
+        const t = obj.trim();
+        if ((t.startsWith('{') && t.endsWith('}')) || (t.startsWith('[') && t.endsWith(']'))) {
+            try {
+                return JSON.parse(obj);
+            } catch (_) {
+                return obj;
+            }
+        }
+        return obj;
+    }
+    if (Array.isArray(obj)) {
+        return obj.map(expandJsonStringsForDisplay);
+    }
+    if (obj && typeof obj === 'object') {
+        const out = {};
+        for (const [k, v] of Object.entries(obj)) {
+            out[k] = expandJsonStringsForDisplay(v);
+        }
+        return out;
+    }
+    return obj;
+}
+
 // Add entry to debug log
 function addDebugLog(type, title, data) {
     const entry = document.createElement('div');
@@ -248,9 +274,10 @@ function addDebugLog(type, title, data) {
                 contentText += `\n\n# Error: ${data.error}`;
             }
         } else {
-            // Regular object, format as JSON
+            // Regular object: expand string values that are JSON so we show raw JSON (no escaped quotes)
             const masked = maskSensitiveData(data);
-            contentText = JSON.stringify(masked, null, 2);
+            const expanded = expandJsonStringsForDisplay(masked);
+            contentText = JSON.stringify(expanded, null, 2);
         }
     }
     content.textContent = contentText;
@@ -948,7 +975,9 @@ function connectSSE(sessionId) {
 
         // Helper function to handle socket messages (scoped to this connection)
         const handleSocketMessage = (message) => {
-            const { types, message: msg } = message;
+            if (!message || typeof message !== 'object') return;
+            const types = Array.isArray(message.types) ? message.types : [];
+            const msg = message.message ?? message.msg ?? message.text ?? '';
 
             // Handle thinking messages
             if (types.includes('AGENT_THINKING') || types.includes('AGENT_STARTED')) {
@@ -1074,7 +1103,7 @@ function connectSSE(sessionId) {
                         eventLength: eventText.length
                     });
 
-                    // Parse SSE format: "event: <name>\ndata: <data>"
+                    // Parse SSE format: "event: <name>\ndata: <data>" (multiple data: lines are concatenated with \n per spec)
                     let eventName = 'message';
                     let eventData = '';
 
@@ -1082,7 +1111,8 @@ function connectSSE(sessionId) {
                         if (line.startsWith('event:')) {
                             eventName = line.substring(6).trim();
                         } else if (line.startsWith('data:')) {
-                            eventData = line.substring(5).trim();
+                            const dataPart = line.substring(5).replace(/^\s+/, '');
+                            eventData = eventData ? eventData + '\n' + dataPart : dataPart;
                         }
                     }
 
