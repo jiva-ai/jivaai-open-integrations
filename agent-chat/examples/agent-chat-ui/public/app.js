@@ -670,9 +670,20 @@ async function handleScreenResponse(responseData) {
                             assetId,
                         });
 
-                        // Reuse SSE for follow-up (only open new if no connection or different session)
+                        // Reuse SSE for follow-up (only open new if no connection or different session); await so we subscribe before sending
                         if (!currentSSEConnection || currentSSESessionId !== currentSessionId) {
-                            connectSSE(currentSessionId);
+                            try {
+                                await connectSSE(currentSessionId);
+                            } catch (sseError) {
+                                addMessage(`SSE connection failed: ${sseError?.message || sseError}`, 'error');
+                                addDebugLog('error', 'SSE Connection Failed', {
+                                    error: sseError?.message || sseError,
+                                    sessionId: currentSessionId,
+                                    workflowId: settings.chatWorkflowId,
+                                    socketBaseUrl: settings.socketBaseUrl,
+                                });
+                                return;
+                            }
                         }
 
                         const apiUrl = `${settings.baseUrl}/${settings.chatWorkflowId}/${settings.chatWorkflowVersion}/invoke`;
@@ -816,8 +827,17 @@ function updateMessage(messageDiv, text) {
     messagesContainer.scrollTop = messagesContainer.scrollHeight;
 }
 
-// Connect to SSE (Server-Sent Events) for real-time updates
-async function connectSSE(sessionId) {
+// Connect to SSE (Server-Sent Events) for real-time updates.
+// Returns a Promise that resolves when the server has sent the "connected" event (subscription ready),
+// or rejects on connection failure. Callers should await this before sending the chat request.
+function connectSSE(sessionId) {
+    let resolveReady, rejectReady;
+    let readyResolved = false;
+    const readyPromise = new Promise((resolve, reject) => {
+        resolveReady = () => { if (!readyResolved) { readyResolved = true; resolve(); } };
+        rejectReady = (err) => { if (!readyResolved) { readyResolved = true; reject(err); } };
+    });
+
     addDebugLog('info', 'SSE Connection Attempt Started', {
         sessionId: sessionId,
         workflowId: settings.chatWorkflowId,
@@ -841,9 +861,11 @@ async function connectSSE(sessionId) {
             hasSocketBaseUrl: !!settings.socketBaseUrl,
             hasApiKey: !!settings.chatApiKey
         });
-        return;
+        rejectReady(new Error('SSE connection failed: missing configuration'));
+        return readyPromise;
     }
 
+    (async () => {
     try {
         // Construct SSE URL: POST {socketBaseUrl}/{workflowId}/{sessionId}
         // socketBaseUrl should already include /workflow-chat
@@ -908,6 +930,7 @@ async function connectSSE(sessionId) {
             });
             currentSSEConnection = null;
             currentSSESessionId = null;
+            rejectReady(new Error(`SSE connection failed: ${response.status} ${response.statusText}`));
             return;
         }
 
@@ -991,7 +1014,10 @@ async function connectSSE(sessionId) {
                 sessionId: sessionId,
                 hasBody: !!response.body
             });
-            throw new Error('Response body is not readable');
+            currentSSEConnection = null;
+            currentSSESessionId = null;
+            rejectReady(new Error('SSE response body is not readable'));
+            return;
         }
 
         addDebugLog('info', 'SSE Stream Reader Created', {
@@ -1068,7 +1094,7 @@ async function connectSSE(sessionId) {
                         eventNumber: eventCount
                     });
 
-                    // Handle "connected" event
+                    // Handle "connected" event - subscription is ready; caller can send chat request
                     if (eventName === 'connected') {
                         connectedEventReceived = true;
                         addDebugLog('info', '✅ SSE Connection Confirmed by Server', {
@@ -1078,6 +1104,7 @@ async function connectSSE(sessionId) {
                             expectedFormat: 'Connected to topic: workflow-chat/{workflowId}/{sessionId}',
                             connectionSuccessful: true
                         });
+                        resolveReady();
                         continue;
                     }
 
@@ -1178,7 +1205,13 @@ async function connectSSE(sessionId) {
         }
         currentSSEConnection = null;
         currentSSESessionId = null;
+        if (!readyResolved) {
+            rejectReady(error instanceof Error ? error : new Error(String(error)));
+        }
     }
+    })();
+
+    return readyPromise;
 }
 
 
@@ -1259,9 +1292,20 @@ async function sendMessage() {
                 assetId,
             });
 
-            // Ensure SSE connection for follow-up (reuse existing for same session)
+            // Ensure SSE connection for follow-up (reuse existing for same session); await so we subscribe before sending
             if (!currentSSEConnection || currentSSESessionId !== currentSessionId) {
-                connectSSE(currentSessionId);
+                try {
+                    await connectSSE(currentSessionId);
+                } catch (sseError) {
+                    addMessage(`SSE connection failed: ${sseError?.message || sseError}`, 'error');
+                    addDebugLog('error', 'SSE Connection Failed', {
+                        error: sseError?.message || sseError,
+                        sessionId: currentSessionId,
+                        workflowId: settings.chatWorkflowId,
+                        socketBaseUrl: settings.socketBaseUrl,
+                    });
+                    return;
+                }
             }
 
             const apiUrl = `${settings.baseUrl}/${settings.chatWorkflowId}/${settings.chatWorkflowVersion}/invoke`;
@@ -1341,7 +1385,7 @@ async function sendMessage() {
         }
     }
 
-    // Connect to SSE for real-time updates (reuse existing connection for same session to avoid aborting mid-stream)
+    // Connect to SSE first, then send chat request (avoids race where server sends before client subscribes)
     const needSSE = !currentSSEConnection || currentSSESessionId !== currentSessionId;
     if (needSSE) {
         addDebugLog('info', 'Initiating SSE Connection Before Chat Request', {
@@ -1349,7 +1393,17 @@ async function sendMessage() {
             timestamp: new Date().toISOString(),
             note: 'SSE connection will be established, then chat request will be sent'
         });
-        connectSSE(currentSessionId);
+        try {
+            await connectSSE(currentSessionId);
+        } catch (sseError) {
+            console.error('SSE connection failed:', sseError);
+            addDebugLog('error', 'SSE connection failed', { error: sseError?.message || String(sseError) });
+            addMessage(`SSE connection failed: ${sseError?.message || sseError}`, 'error');
+            sendBtn.disabled = false;
+            messageInput.disabled = false;
+            messageInput.focus();
+            return;
+        }
     } else {
         addDebugLog('info', 'Reusing existing SSE connection for same session', {
             sessionId: currentSessionId
