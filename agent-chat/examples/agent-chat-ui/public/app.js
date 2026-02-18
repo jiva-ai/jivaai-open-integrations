@@ -971,69 +971,15 @@ function connectSSE(sessionId) {
             note: 'Waiting for "connected" event from server...'
         });
 
-        let thinkingMessageDiv = null;
-
-        // Helper function to handle socket messages (scoped to this connection)
+        // One new chat bubble per socket message; types reserved for future formatting
         const handleSocketMessage = (message) => {
             if (!message || typeof message !== 'object') return;
             const types = Array.isArray(message.types) ? message.types : [];
             const msg = message.message ?? message.msg ?? message.text ?? '';
+            if (msg === '') return;
 
-            // Handle thinking messages
-            if (types.includes('AGENT_THINKING') || types.includes('AGENT_STARTED')) {
-                if (!thinkingMessageDiv) {
-                    thinkingMessageDiv = addMessage(msg || 'Agent is thinking...', 'thinking');
-                } else {
-                    updateMessage(thinkingMessageDiv, msg || 'Agent is thinking...');
-                }
-            }
-
-            // Handle content updates
-            if (types.includes('CONTENT_DELTA') || types.includes('CONTENT_COMPLETE')) {
-                if (thinkingMessageDiv) {
-                    // Replace thinking message with actual content
-                    thinkingMessageDiv.className = 'message assistant';
-                    updateMessage(thinkingMessageDiv, msg);
-                } else {
-                    addMessage(msg, 'assistant');
-                }
-            }
-
-            // Handle final result
-            if (types.includes('FINAL_RESULT') || types.includes('AGENT_COMPLETED')) {
-                if (thinkingMessageDiv) {
-                    thinkingMessageDiv.className = 'message assistant';
-                    updateMessage(thinkingMessageDiv, msg || 'Request completed');
-                    thinkingMessageDiv = null;
-                } else if (msg) {
-                    addMessage(msg, 'assistant');
-                }
-            }
-
-            // Handle errors
-            if (types.includes('ERROR') || types.includes('AGENT_FAILED')) {
-                if (thinkingMessageDiv) {
-                    thinkingMessageDiv.className = 'message error';
-                    updateMessage(thinkingMessageDiv, `Error: ${msg || 'Request failed'}`);
-                    thinkingMessageDiv = null;
-                } else {
-                    addMessage(`Error: ${msg || 'Request failed'}`, 'error');
-                }
-            }
-
-            // Handle execution updates
-            if (types.includes('EXECUTION_CALL_STARTED') || types.includes('EXECUTION_CALL_RESULT')) {
-                if (msg && thinkingMessageDiv) {
-                    updateMessage(thinkingMessageDiv, `Processing: ${msg}`);
-                }
-            }
-
-            // Handle progress updates
-            if (types.includes('PROGRESS_UPDATE')) {
-                if (msg && thinkingMessageDiv) {
-                    updateMessage(thinkingMessageDiv, `Progress: ${msg}`);
-                }
-            }
+            const isError = types.includes('ERROR') || types.includes('AGENT_FAILED');
+            addMessage(isError ? `Error: ${msg}` : msg, isError ? 'error' : 'assistant');
         };
 
         // Parse SSE stream manually
