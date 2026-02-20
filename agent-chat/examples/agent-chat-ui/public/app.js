@@ -24,6 +24,67 @@ let currentSSEConnection = null;
 /** Session id for the active SSE connection; reuse connection when same session to avoid aborting mid-stream */
 let currentSSESessionId = null;
 
+/** Current agent thinking block (wrapper + items). Collapsed when next assistant response is added. */
+let currentThinkingBlock = null;
+let currentThinkingItems = null;
+let currentStreamingBubble = null;
+let currentStreamingBody = null;
+/** Accumulated text for streaming bubble (so we can re-render as Markdown) */
+let streamingAccumulatedText = '';
+/** Displayed so far (word-by-word catch-up) */
+let streamingDisplayedText = '';
+/** Timer for streaming word-by-word animation */
+let streamingTypingTimer = null;
+const STREAMING_WORD_MS = 28;
+
+/** Queue of socket messages to show one-at-a-time in the thinking bubble */
+let socketMessageQueue = [];
+let socketQueueBusy = false;
+
+// Socket message type display labels (Java enum names → short label)
+const SOCKET_TYPE_LABELS = {
+    AGENT_STARTED: 'Started',
+    AGENT_THINKING: 'Thinking',
+    AGENT_COMPLETED: 'Completed',
+    AGENT_FAILED: 'Failed',
+    EXECUTION_CALL_STARTED: 'Call',
+    EXECUTION_CALL_RESULT: 'Result',
+    EXECUTION_CALL_FAILED: 'Call failed',
+    EXECUTION_FOLLOWUP: 'Follow-up suggestion',
+    CONTENT_DELTA: 'Content',
+    CONTENT_COMPLETE: 'Complete',
+    REASONING: 'Reasoning',
+    PLAN_CREATED: 'Plan',
+    STEP_STARTED: 'Step',
+    STEP_COMPLETED: 'Step done',
+    DATA_CHUNK: 'Data',
+    FINAL_RESULT: 'Result',
+    ARTIFACT_CREATED: 'Artifact',
+    USER_INPUT_REQUIRED: 'Input needed',
+    CONFIRMATION_REQUIRED: 'Confirm',
+    PROGRESS_UPDATE: 'Progress',
+    TOKEN_USAGE: 'Tokens',
+    COST_UPDATE: 'Cost',
+    SYSTEM_INFO: 'System',
+    WARNING: 'Warning',
+    ERROR: 'Error',
+    DEBUG: 'Debug',
+    SESSION_STARTED: 'Session',
+    SESSION_RESUMED: 'Resumed',
+    SESSION_ENDED: 'Ended',
+    AGENT_HANDOFF: 'Handoff',
+    AGENT_COLLABORATION: 'Collaboration',
+    CODE_BLOCK: 'Code',
+    MARKDOWN: 'Markdown',
+    IMAGE_URL: 'Image',
+    FILE_REFERENCE: 'File',
+    RATE_LIMIT_WARNING: 'Rate limit',
+    THROTTLED: 'Throttled',
+    STREAM_START: 'Stream start',
+    STREAM_END: 'Stream end',
+    KEEPALIVE: 'Keepalive',
+};
+
 // DOM elements
 const messagesContainer = document.getElementById('messages');
 const messageInput = document.getElementById('messageInput');
@@ -331,8 +392,10 @@ function isTerminalState(pollResponse) {
     return state === 'OK' || state === 'ERROR' || state === 'PARTIAL_OK';
 }
 
-// Poll until conversation reaches a terminal state (OK, ERROR, or PARTIAL_OK)
-async function pollUntilComplete(executionId, sessionId) {
+// Poll until conversation reaches a terminal state (OK, ERROR, or PARTIAL_OK).
+// Optional onComplete(data) callback: when provided, it is called with the poll response and no UI update is done
+// (so the caller can use it when not relying on SSE; when using SSE, the result comes via EXECUTION_CALL_RESULT).
+async function pollUntilComplete(executionId, sessionId, onComplete) {
     const maxPollAttempts = 100;
     const pollInterval = 5000; // 5 seconds
     let pollAttempts = 0;
@@ -404,8 +467,13 @@ async function pollUntilComplete(executionId, sessionId) {
                         state: state,
                         totalAttempts: pollAttempts
                     });
-                    
-                    // Extract and display the final message if state is OK
+
+                    if (typeof onComplete === 'function') {
+                        onComplete(data);
+                        return data;
+                    }
+
+                    // No callback: extract and display the final message (for readers using polling without SSE)
                     const responseData = data.json?.default;
                     addDebugLog('info', 'Final Response', responseData);
                     
@@ -433,7 +501,7 @@ async function pollUntilComplete(executionId, sessionId) {
                     
                     // Display the message in the chat interface if state is OK and message exists
                     if (isOK && finalMessage) {
-                        addMessage(finalMessage, 'assistant');
+                        addMessage(finalMessage, 'assistant', new Date(), true);
                     } else if (state === 'ERROR') {
                         // Display error message
                         const errorMsg = responseData.logs?.join('\n') || 
@@ -446,7 +514,7 @@ async function pollUntilComplete(executionId, sessionId) {
                                          (responseData.logs && responseData.logs.length > 0 
                                            ? responseData.logs.join('\n') 
                                            : 'Partial results available');
-                        addMessage(partialMsg, 'assistant');
+                        addMessage(partialMsg, 'assistant', new Date(), true);
                     }
                     
                     return data;
@@ -612,7 +680,8 @@ async function handleScreenResponse(responseData) {
     }
 
     if (screenType === 'file') {
-        // 1. Asking for a file
+        // 1. Asking for a file — reset so follow-up socket messages appear after this
+        resetThinkingStateForNewBlock();
         const messageDiv = addMessage(
             `The agent needs a file to proceed:\n\n${baseMessage}`,
             'assistant'
@@ -642,7 +711,8 @@ async function handleScreenResponse(responseData) {
                     }
 
                     try {
-                        // Show the selected file in chat as a user message
+                        // Show the selected file in chat as a user message; reset so follow-up socket messages appear after this
+                        resetThinkingStateForNewBlock();
                         addMessage(`Selected file: ${file.name}`, 'user');
 
                         const base64Content = await fileToBase64(file);
@@ -792,7 +862,8 @@ async function handleScreenResponse(responseData) {
             textDiv.appendChild(button);
         }
     } else if (screenType === 'text') {
-        // 2. Asking for text
+        // 2. Asking for text — reset so follow-up socket messages appear after this
+        resetThinkingStateForNewBlock();
         pendingTextScreen = { nodeId, field };
         addMessage(
             `The agent needs some text input to proceed:\n\n${baseMessage}\n\nPlease type your response in the chat box. Your next message will be used to satisfy this request.`,
@@ -800,8 +871,49 @@ async function handleScreenResponse(responseData) {
         );
     } else if (screenType === 'table') {
         // 3. Asking for a table format (not implemented)
-        addMessage('Table screen response is not implemented yet.', 'assistant');
+        addMessage('Table screen response is not implemented yet.', 'assistant', new Date(), true);
     }
+}
+
+// Minimum total typing duration (ms) so short messages still animate visibly
+const MIN_TYPING_DURATION_MS = 420;
+
+// Word-by-word typing (ChatGPT-style). Options: markdownWhenDone (bool), cursorElement (re-appended when done), speedMs (default 35), onComplete (fn).
+function revealWords(container, fullText, options = {}) {
+    const { markdownWhenDone = false, cursorElement = null, speedMs = 35, onComplete } = options;
+    if (!fullText || typeof fullText !== 'string') {
+        if (markdownWhenDone) renderMessageContent(container, fullText || '', true);
+        if (cursorElement && container) container.appendChild(cursorElement);
+        if (onComplete) onComplete();
+        return;
+    }
+    const chunks = fullText.split(/(\s+)/).filter(Boolean);
+    const totalMs = Math.max(chunks.length * speedMs, MIN_TYPING_DURATION_MS);
+    const delayPerChunk = chunks.length > 0 ? totalMs / chunks.length : 0;
+    let i = 0;
+    function run() {
+        if (i < chunks.length) {
+            const current = chunks.slice(0, i + 1).join('');
+            container.textContent = current;
+            i++;
+            setTimeout(run, delayPerChunk);
+        } else {
+            if (markdownWhenDone && window.marked && window.DOMPurify) {
+                try {
+                    const rawHtml = window.marked.parse(fullText);
+                    const safeHtml = window.DOMPurify.sanitize(rawHtml, { ALLOWED_ATTR: ['href', 'title', 'target', 'rel'] });
+                    container.innerHTML = safeHtml;
+                } catch (e) {
+                    container.textContent = fullText;
+                }
+            } else {
+                container.textContent = fullText;
+            }
+            if (cursorElement && container) container.appendChild(cursorElement);
+            if (onComplete) onComplete();
+        }
+    }
+    run();
 }
 
 // Helper: render text as either plain text or markdown HTML
@@ -824,23 +936,39 @@ function renderMessageContent(container, text, isAssistant) {
     container.textContent = text;
 }
 
-// Add message to chat
-function addMessage(text, type = 'assistant', timestamp = new Date()) {
+// Add message to chat. solid = true for final assistant response (distinct from thinking).
+// When solid and type is assistant, text is revealed word-by-word (animate) unless options.animate === false.
+function addMessage(text, type = 'assistant', timestamp = new Date(), solid = false, options = {}) {
     const messageDiv = document.createElement('div');
     messageDiv.className = `message ${type}`;
-    
+    if (type === 'assistant' && solid) messageDiv.classList.add('solid');
+
     const textDiv = document.createElement('div');
+    const shouldAnimate = solid && type === 'assistant' && options.animate !== false && (text || '').length > 0;
+    if (shouldAnimate) {
+        messageDiv.appendChild(textDiv);
+        const timeDiv = document.createElement('div');
+        timeDiv.className = 'message-time';
+        timeDiv.textContent = timestamp.toLocaleTimeString();
+        messageDiv.appendChild(timeDiv);
+        messagesContainer.appendChild(messageDiv);
+        messagesContainer.scrollTop = messagesContainer.scrollHeight;
+        revealWords(textDiv, text || '', {
+            markdownWhenDone: true,
+            speedMs: 38,
+            onComplete: () => { messagesContainer.scrollTop = messagesContainer.scrollHeight; },
+        });
+        return messageDiv;
+    }
+
     renderMessageContent(textDiv, text, type === 'assistant');
     messageDiv.appendChild(textDiv);
-    
     const timeDiv = document.createElement('div');
     timeDiv.className = 'message-time';
     timeDiv.textContent = timestamp.toLocaleTimeString();
     messageDiv.appendChild(timeDiv);
-    
     messagesContainer.appendChild(messageDiv);
     messagesContainer.scrollTop = messagesContainer.scrollHeight;
-    
     return messageDiv;
 }
 
@@ -852,6 +980,218 @@ function updateMessage(messageDiv, text) {
         renderMessageContent(textDiv, text, isAssistant);
     }
     messagesContainer.scrollTop = messagesContainer.scrollHeight;
+}
+
+// --- Agent thinking block (collapsible) and streaming ---
+
+function ensureThinkingBlock() {
+    if (currentThinkingBlock) return;
+    const block = document.createElement('div');
+    block.className = 'agent-thinking-block';
+    const toggle = document.createElement('button');
+    toggle.type = 'button';
+    toggle.className = 'thinking-toggle';
+    toggle.setAttribute('aria-expanded', 'true');
+    const countSpan = document.createElement('span');
+    countSpan.className = 'thinking-count';
+    toggle.appendChild(document.createTextNode('Agent thinking '));
+    toggle.appendChild(countSpan);
+    toggle.appendChild(document.createTextNode(' '));
+    const icon = document.createElement('span');
+    icon.className = 'toggle-icon';
+    icon.textContent = '▼';
+    toggle.appendChild(icon);
+    block.appendChild(toggle);
+    const content = document.createElement('div');
+    content.className = 'thinking-content';
+    const items = document.createElement('div');
+    items.className = 'thinking-items';
+    content.appendChild(items);
+    block.appendChild(content);
+    let itemCount = 0;
+    function updateCount() {
+        countSpan.textContent = `(${itemCount})`;
+        toggle.setAttribute('aria-label', itemCount ? `Show ${itemCount} agent thinking messages` : 'Agent thinking');
+    }
+    toggle.addEventListener('click', () => {
+        const collapsed = block.classList.toggle('collapsed');
+        toggle.setAttribute('aria-expanded', String(!collapsed));
+    });
+    block._updateCount = () => { itemCount++; updateCount(); };
+    currentThinkingBlock = block;
+    currentThinkingItems = items;
+    updateCount();
+}
+
+function appendThinkingBlockToDOM() {
+    if (currentThinkingBlock && !currentThinkingBlock.parentNode) {
+        messagesContainer.appendChild(currentThinkingBlock);
+    }
+}
+
+function getPrimaryType(types) {
+    if (!Array.isArray(types) || types.length === 0) return 'SYSTEM_INFO';
+    const priority = ['ERROR', 'AGENT_FAILED', 'FINAL_RESULT', 'CONTENT_COMPLETE', 'CONTENT_DELTA', 'REASONING', 'AGENT_THINKING', 'AGENT_STARTED', 'EXECUTION_CALL_FAILED', 'WARNING', 'EXECUTION_FOLLOWUP', 'STEP_COMPLETED', 'STEP_STARTED', 'PLAN_CREATED', 'EXECUTION_CALL_RESULT', 'EXECUTION_CALL_STARTED', 'AGENT_COMPLETED'];
+    for (const t of priority) {
+        if (types.includes(t)) return t;
+    }
+    return types[0];
+}
+
+function processSocketQueue() {
+    if (socketQueueBusy || socketMessageQueue.length === 0) return;
+    const item = socketMessageQueue.shift();
+    if (!item) return;
+    socketQueueBusy = true;
+    const { types, msg } = item;
+    const isError = types.includes('ERROR') || types.includes('AGENT_FAILED');
+    if (isError) addMessage(`Error: ${msg}`, 'error');
+    addAgentThinkingMessage(types, msg, {
+        onComplete: () => {
+            socketQueueBusy = false;
+            processSocketQueue();
+        },
+    });
+}
+
+function addAgentThinkingMessage(types, msg, options = {}) {
+    ensureThinkingBlock();
+    appendThinkingBlockToDOM();
+    const primaryType = getPrimaryType(types);
+    const label = SOCKET_TYPE_LABELS[primaryType] || primaryType;
+    const div = document.createElement('div');
+    div.className = `agent-msg agent-msg--${primaryType}`;
+    const labelEl = document.createElement('div');
+    labelEl.className = 'agent-msg__label';
+    labelEl.textContent = label;
+    div.appendChild(labelEl);
+    const body = document.createElement('div');
+    body.className = 'agent-msg__body';
+    div.appendChild(body);
+    currentThinkingItems.appendChild(div);
+    if (currentThinkingBlock._updateCount) currentThinkingBlock._updateCount();
+    messagesContainer.scrollTop = messagesContainer.scrollHeight;
+    const content = msg || '(no message)';
+    const { onComplete: userOnComplete } = options;
+    revealWords(body, content, {
+        markdownWhenDone: true,
+        speedMs: 32,
+        onComplete: () => {
+            messagesContainer.scrollTop = messagesContainer.scrollHeight;
+            if (userOnComplete) userOnComplete();
+        },
+    });
+    return div;
+}
+
+function getOrCreateStreamingBubble() {
+    if (currentStreamingBubble && currentStreamingBody) return { bubble: currentStreamingBubble, body: currentStreamingBody };
+    ensureThinkingBlock();
+    appendThinkingBlockToDOM();
+    const div = document.createElement('div');
+    div.className = 'agent-msg agent-msg--streaming agent-msg--CONTENT_DELTA';
+    const body = document.createElement('div');
+    body.className = 'agent-msg__body';
+    const cursor = document.createElement('span');
+    cursor.className = 'stream-cursor';
+    cursor.setAttribute('aria-hidden', 'true');
+    body.appendChild(document.createTextNode(''));
+    body.appendChild(cursor);
+    div.appendChild(body);
+    currentThinkingItems.appendChild(div);
+    if (currentThinkingBlock._updateCount) currentThinkingBlock._updateCount();
+    currentStreamingBubble = div;
+    currentStreamingBody = body;
+    messagesContainer.scrollTop = messagesContainer.scrollHeight;
+    return { bubble: div, body };
+}
+
+function runStreamingTyping() {
+    if (!currentStreamingBody || streamingDisplayedText.length >= streamingAccumulatedText.length) {
+        if (streamingTypingTimer) {
+            clearInterval(streamingTypingTimer);
+            streamingTypingTimer = null;
+        }
+        if (currentStreamingBody && streamingDisplayedText.length >= streamingAccumulatedText.length && streamingAccumulatedText.length > 0) {
+            const cursor = document.createElement('span');
+            cursor.className = 'stream-cursor';
+            cursor.setAttribute('aria-hidden', 'true');
+            if (window.marked && window.DOMPurify) {
+                try {
+                    const rawHtml = window.marked.parse(streamingAccumulatedText);
+                    const safeHtml = window.DOMPurify.sanitize(rawHtml, { ALLOWED_ATTR: ['href', 'title', 'target', 'rel'] });
+                    currentStreamingBody.innerHTML = safeHtml;
+                } catch (e) {
+                    currentStreamingBody.textContent = streamingAccumulatedText;
+                }
+            } else {
+                currentStreamingBody.textContent = streamingAccumulatedText;
+            }
+            currentStreamingBody.appendChild(cursor);
+        }
+        messagesContainer.scrollTop = messagesContainer.scrollHeight;
+        return;
+    }
+    const remainder = streamingAccumulatedText.slice(streamingDisplayedText.length);
+    const nextChunk = remainder.match(/^\s*\S+/)?.[0] || remainder;
+    streamingDisplayedText += nextChunk;
+    currentStreamingBody.textContent = streamingDisplayedText;
+    const cursor = document.createElement('span');
+    cursor.className = 'stream-cursor';
+    cursor.setAttribute('aria-hidden', 'true');
+    currentStreamingBody.appendChild(cursor);
+    messagesContainer.scrollTop = messagesContainer.scrollHeight;
+}
+
+function appendStreamingDelta(deltaText) {
+    if (!deltaText) return;
+    const { body } = getOrCreateStreamingBubble();
+    streamingAccumulatedText += deltaText;
+    if (!streamingTypingTimer) {
+        streamingTypingTimer = setInterval(runStreamingTyping, STREAMING_WORD_MS);
+    }
+    runStreamingTyping();
+}
+
+// Reset refs so the next socket message creates a new thinking block (e.g. after a screen or user response).
+// Does not collapse or modify DOM; use when messages must appear in time order after an inserted message.
+function resetThinkingStateForNewBlock() {
+    if (streamingTypingTimer) {
+        clearInterval(streamingTypingTimer);
+        streamingTypingTimer = null;
+    }
+    streamingDisplayedText = '';
+    socketMessageQueue = [];
+    socketQueueBusy = false;
+    currentThinkingBlock = null;
+    currentThinkingItems = null;
+    currentStreamingBubble = null;
+    currentStreamingBody = null;
+    streamingAccumulatedText = '';
+}
+
+function collapseCurrentThinkingBlock() {
+    if (streamingTypingTimer) {
+        clearInterval(streamingTypingTimer);
+        streamingTypingTimer = null;
+    }
+    streamingDisplayedText = '';
+    socketMessageQueue = [];
+    socketQueueBusy = false;
+    if (!currentThinkingBlock) return;
+    const toggle = currentThinkingBlock.querySelector('.thinking-toggle');
+    currentThinkingBlock.classList.add('collapsed');
+    if (toggle) toggle.setAttribute('aria-expanded', 'false');
+    currentThinkingBlock = null;
+    currentThinkingItems = null;
+    currentStreamingBubble = null;
+    currentStreamingBody = null;
+    streamingAccumulatedText = '';
+}
+
+function addChatResponse(text) {
+    collapseCurrentThinkingBlock();
+    addMessage(text, 'assistant', new Date(), true);
 }
 
 // Connect to SSE (Server-Sent Events) for real-time updates.
@@ -971,15 +1311,34 @@ function connectSSE(sessionId) {
             note: 'Waiting for "connected" event from server...'
         });
 
-        // One new chat bubble per socket message; types reserved for future formatting
         const handleSocketMessage = (message) => {
             if (!message || typeof message !== 'object') return;
             const types = Array.isArray(message.types) ? message.types : [];
-            const msg = message.message ?? message.msg ?? message.text ?? '';
-            if (msg === '') return;
+            const msg = String(message.message ?? message.msg ?? message.text ?? '').trim();
 
-            const isError = types.includes('ERROR') || types.includes('AGENT_FAILED');
-            addMessage(isError ? `Error: ${msg}` : msg, isError ? 'error' : 'assistant');
+            if (types.includes('KEEPALIVE')) return;
+
+            const isFinalResponse = types.includes('CONTENT_COMPLETE') || types.includes('FINAL_RESULT');
+            if (isFinalResponse && msg) {
+                addChatResponse(msg);
+                return;
+            }
+
+            // Final result from execution call — use for assistant message; do not show in thinking bubble (would duplicate)
+            if (types.includes('EXECUTION_CALL_RESULT') && msg) {
+                addChatResponse(msg);
+                return;
+            }
+
+            if (types.includes('CONTENT_DELTA')) {
+                const delta = message.message ?? message.msg ?? message.text ?? '';
+                if (delta !== '') appendStreamingDelta(delta);
+                return;
+            }
+
+            // Queue all other socket messages so they appear in the thinking bubble (including type-only events with no body, e.g. STEP_COMPLETED)
+            socketMessageQueue.push({ types, msg: msg || '(event)' });
+            processSocketQueue();
         };
 
         // Parse SSE stream manually
@@ -1011,7 +1370,36 @@ function connectSSE(sessionId) {
                 const { done, value } = await reader.read();
                 
                 if (done) {
-                    // Stream ended
+                    // Flush decoder (handles any partial UTF-8 at end of stream) and process remaining buffer
+                    const flush = (value && value.length) ? decoder.decode(value, { stream: false }) : decoder.decode(new Uint8Array(0), { stream: false });
+                    if (flush) buffer += flush;
+                    // Process any remaining complete events in buffer before exiting
+                    let boundaryMatch;
+                    while ((boundaryMatch = buffer.match(/\r\n\r\n|\n\n/)) !== null) {
+                        const delimiter = boundaryMatch[0];
+                        const eventEndIndex = buffer.indexOf(delimiter);
+                        const eventText = buffer.substring(0, eventEndIndex);
+                        buffer = buffer.substring(eventEndIndex + delimiter.length);
+                        eventCount++;
+                        addDebugLog('debug', 'SSE Event Parsed (stream ended)', { sessionId: sessionId, eventNumber: eventCount, eventLength: eventText.length });
+                        let eventName = 'message';
+                        let eventData = '';
+                        for (const line of eventText.split(/\r\n|\n/)) {
+                            const trimmedLine = line.replace(/\r$/, '');
+                            if (trimmedLine.startsWith('event:')) eventName = trimmedLine.substring(6).trim();
+                            else if (trimmedLine.startsWith('data:')) {
+                                const dataPart = trimmedLine.substring(5).replace(/^\s+/, '').replace(/\r$/, '');
+                                eventData = eventData ? eventData + '\n' + dataPart : dataPart;
+                            }
+                        }
+                        if (eventName === 'connected') { connectedEventReceived = true; resolveReady(); }
+                        else if (eventData) {
+                            try {
+                                const message = JSON.parse(eventData);
+                                handleSocketMessage(message);
+                            } catch (e) { addDebugLog('error', 'SSE Parse Error (stream ended)', { sessionId: sessionId, error: e.message }); }
+                        }
+                    }
                     addDebugLog('info', 'SSE Stream Ended (done=true)', {
                         sessionId: sessionId,
                         reason: 'Stream ended normally',
@@ -1024,7 +1412,7 @@ function connectSSE(sessionId) {
                     break;
                 }
 
-                // Decode chunk and add to buffer
+                // Decode chunk and add to buffer (stream: true so partial UTF-8 is held until next chunk)
                 const chunk = decoder.decode(value, { stream: true });
                 buffer += chunk;
 
@@ -1035,11 +1423,13 @@ function connectSSE(sessionId) {
                     chunkPreview: chunk.substring(0, 100)
                 });
 
-                // Process complete SSE messages (lines ending with \n\n)
-                let eventEndIndex;
-                while ((eventEndIndex = buffer.indexOf('\n\n')) !== -1) {
+                // Process complete SSE messages (event boundary is \n\n or \r\n\r\n per SSE spec)
+                let boundaryMatch;
+                while ((boundaryMatch = buffer.match(/\r\n\r\n|\n\n/)) !== null) {
+                    const delimiter = boundaryMatch[0];
+                    const eventEndIndex = buffer.indexOf(delimiter);
                     const eventText = buffer.substring(0, eventEndIndex);
-                    buffer = buffer.substring(eventEndIndex + 2);
+                    buffer = buffer.substring(eventEndIndex + delimiter.length);
                     eventCount++;
 
                     addDebugLog('debug', 'SSE Event Parsed', {
@@ -1049,15 +1439,16 @@ function connectSSE(sessionId) {
                         eventLength: eventText.length
                     });
 
-                    // Parse SSE format: "event: <name>\ndata: <data>" (multiple data: lines are concatenated with \n per spec)
+                    // Parse SSE format: "event: <name>\ndata: <data>" (lines can be LF or CRLF; multiple data: lines concatenated with \n)
                     let eventName = 'message';
                     let eventData = '';
 
-                    for (const line of eventText.split('\n')) {
-                        if (line.startsWith('event:')) {
-                            eventName = line.substring(6).trim();
-                        } else if (line.startsWith('data:')) {
-                            const dataPart = line.substring(5).replace(/^\s+/, '');
+                    for (const line of eventText.split(/\r\n|\n/)) {
+                        const trimmedLine = line.replace(/\r$/, '');
+                        if (trimmedLine.startsWith('event:')) {
+                            eventName = trimmedLine.substring(6).trim();
+                        } else if (trimmedLine.startsWith('data:')) {
+                            const dataPart = trimmedLine.substring(5).replace(/^\s+/, '').replace(/\r$/, '');
                             eventData = eventData ? eventData + '\n' + dataPart : dataPart;
                         }
                     }
@@ -1208,8 +1599,20 @@ async function sendMessage() {
     sendBtn.disabled = true;
     messageInput.disabled = true;
 
-    // Add user message to chat
+    // Add user message to chat and reset agent thinking state for this turn
     addMessage(message, 'user');
+    if (streamingTypingTimer) {
+        clearInterval(streamingTypingTimer);
+        streamingTypingTimer = null;
+    }
+    streamingDisplayedText = '';
+    socketMessageQueue = [];
+    socketQueueBusy = false;
+    currentThinkingBlock = null;
+    currentThinkingItems = null;
+    currentStreamingBubble = null;
+    currentStreamingBody = null;
+    streamingAccumulatedText = '';
     messageInput.value = '';
 
     // If we have a pending text screen, treat this message as the text content to upload
@@ -1499,17 +1902,14 @@ function handleConversationResponse(data) {
         directId: responseData.id
     });
 
-    // Check if we need to poll (state is RUNNING and we have an execution ID)
-    // This matches the backend behavior: when state is RUNNING with an id, we need to poll
+    // Result is delivered via SSE (EXECUTION_CALL_RESULT). Polling is not used; kept for non-SSE use:
+    // pollUntilComplete(executionId, currentSessionId, (data) => { ... }) to handle result in callback.
     if (state === 'RUNNING' && executionId) {
-        addDebugLog('info', 'Starting Polling', {
-            message: `Conversation state is RUNNING with execution ID. Starting polling every 5 seconds.`,
+        addDebugLog('info', 'Async execution started', {
+            message: `Conversation state is RUNNING with execution ID. Final result will arrive via SSE (EXECUTION_CALL_RESULT).`,
             executionId: executionId,
             state: state
         });
-
-        // Start polling (will poll immediately on first attempt, then every 5 seconds)
-        pollUntilComplete(executionId, currentSessionId);
     } else if (state && state !== 'RUNNING') {
         // Log when we don't start polling because state is not RUNNING
         addDebugLog('info', 'Skipping Polling', {
@@ -1529,7 +1929,7 @@ function handleConversationResponse(data) {
             // Regular response - SSE should have already handled it
             // But add it here as fallback if SSE didn't work
             if (!currentSSEConnection) {
-                addMessage(responseData.message, 'assistant');
+                addMessage(responseData.message, 'assistant', new Date(), true);
             }
         }
 
@@ -1537,7 +1937,7 @@ function handleConversationResponse(data) {
         if (responseData.executions && responseData.executions.length > 0) {
             responseData.executions.forEach((exec) => {
                 if (exec.response) {
-                    addMessage(`Execution: ${exec.response} (${exec.type})`, 'assistant');
+                    addMessage(`Execution: ${exec.response} (${exec.type})`, 'assistant', new Date(), true);
                 }
             });
         }

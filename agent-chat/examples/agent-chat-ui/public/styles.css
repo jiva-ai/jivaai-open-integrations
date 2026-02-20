@@ -309,6 +309,206 @@ header h1 {
     color: #0B3954;
 }
 
+/* --- Assistant (solid) chat response: more prominent --- */
+.message.assistant.solid {
+    background: #FFFFFF;
+    border: 1px solid #E0E0E0;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.06);
+    animation: messageSolidIn 0.35s ease-out;
+}
+
+@keyframes messageSolidIn {
+    from {
+        opacity: 0;
+        transform: translateY(8px) scale(0.98);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0) scale(1);
+    }
+}
+
+/* --- Agent thinking block (collapsible) --- */
+.agent-thinking-block {
+    align-self: flex-start;
+    max-width: 85%;
+    width: 100%;
+    margin-bottom: 4px;
+}
+
+.agent-thinking-block .thinking-toggle {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 12px;
+    background: #E8F4F5;
+    border: 1px solid #087E8B;
+    border-radius: 8px;
+    color: #0B3954;
+    font-size: 12px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: background 0.2s, border-color 0.2s;
+    font-family: 'DM Sans', sans-serif;
+}
+
+.agent-thinking-block .thinking-toggle:hover {
+    background: #D4EDF0;
+    border-color: #066A75;
+}
+
+.agent-thinking-block .thinking-toggle .toggle-icon {
+    transition: transform 0.2s ease;
+    font-size: 10px;
+    opacity: 0.8;
+}
+
+.agent-thinking-block.collapsed .thinking-toggle .toggle-icon {
+    transform: rotate(-90deg);
+}
+
+.agent-thinking-block .thinking-content {
+    overflow: hidden;
+    max-height: 5000px;
+    transition: max-height 0.35s ease-out, opacity 0.2s;
+}
+
+.agent-thinking-block.collapsed .thinking-content {
+    max-height: 0 !important;
+    opacity: 0;
+    margin: 0;
+    padding: 0;
+}
+
+/* --- Single bubble for all thinking content --- */
+.agent-thinking-block .thinking-items {
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+    padding: 14px 16px;
+    padding-top: 10px;
+    background: #FAFAFA;
+    border: 1px solid #E8E8E8;
+    border-radius: 10px;
+    margin-top: 6px;
+}
+
+/* --- Rows inside the bubble: no per-row bubble, just label + text --- */
+.agent-msg {
+    padding: 8px 0;
+    font-size: 13px;
+    line-height: 1.45;
+    animation: agentMsgIn 0.3s ease-out;
+    border: none;
+    background: none;
+}
+
+.agent-msg:not(:last-child) {
+    border-bottom: 1px solid #EEEEEE;
+}
+
+@keyframes agentMsgIn {
+    from {
+        opacity: 0;
+        transform: translateX(-6px);
+    }
+    to {
+        opacity: 1;
+        transform: translateX(0);
+    }
+}
+
+.agent-msg__label {
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    margin-bottom: 3px;
+    font-family: 'DM Sans', sans-serif;
+    padding-left: 8px;
+    border-left: 3px solid #BDBDBD;
+}
+
+.agent-msg__body {
+    word-wrap: break-word;
+    white-space: pre-wrap;
+    color: #37474F;
+}
+
+/* Type-specific: label (and optional body) color only — no bubble background */
+.agent-msg--AGENT_STARTED .agent-msg__label { color: #0D47A1; border-left-color: #1976D2; }
+.agent-msg--AGENT_THINKING .agent-msg__label { color: #4A148C; border-left-color: #7B1FA2; font-style: italic; }
+.agent-msg--AGENT_COMPLETED .agent-msg__label { color: #1B5E20; border-left-color: #388E3C; }
+.agent-msg--AGENT_FAILED .agent-msg__label { color: #B71C1C; border-left-color: #D32F2F; font-weight: 700; }
+.agent-msg--EXECUTION_CALL_STARTED .agent-msg__label { color: #E65100; border-left-color: #F57C00; }
+.agent-msg--EXECUTION_CALL_RESULT .agent-msg__label { color: #2E7D32; border-left-color: #43A047; }
+.agent-msg--EXECUTION_CALL_FAILED .agent-msg__label { color: #C62828; border-left-color: #E53935; }
+.agent-msg--EXECUTION_FOLLOWUP .agent-msg__label { color: #00695C; border-left-color: #00897B; font-weight: 600; }
+.agent-msg--CONTENT_DELTA .agent-msg__label { color: #424242; border-left-color: #9E9E9E; }
+.agent-msg--CONTENT_COMPLETE .agent-msg__label { color: #1B5E20; border-left-color: #388E3C; }
+.agent-msg--REASONING .agent-msg__label { color: #880E4F; border-left-color: #AD1457; font-style: italic; }
+.agent-msg--PLAN_CREATED .agent-msg__label { color: #01579B; border-left-color: #0288D1; }
+.agent-msg--STEP_STARTED .agent-msg__label { color: #F57F17; border-left-color: #FFA000; }
+.agent-msg--STEP_COMPLETED .agent-msg__label { color: #33691E; border-left-color: #689F38; }
+.agent-msg--DATA_CHUNK .agent-msg__label { color: #37474F; border-left-color: #607D8B; }
+.agent-msg--DATA_CHUNK .agent-msg__body { font-family: 'Roboto', 'Consolas', monospace; font-size: 12px; }
+.agent-msg--FINAL_RESULT .agent-msg__label { color: #1B5E20; border-left-color: #2E7D32; font-weight: 600; }
+.agent-msg--ARTIFACT_CREATED .agent-msg__label { color: #0D47A1; border-left-color: #1976D2; }
+.agent-msg--USER_INPUT_REQUIRED .agent-msg__label { color: #E65100; border-left-color: #FF9800; }
+.agent-msg--CONFIRMATION_REQUIRED .agent-msg__label { color: #F57F17; border-left-color: #FFC107; }
+.agent-msg--PROGRESS_UPDATE .agent-msg__label { color: #006064; border-left-color: #00ACC1; }
+.agent-msg--TOKEN_USAGE .agent-msg__label { color: #616161; border-left-color: #9E9E9E; font-size: 10px; }
+.agent-msg--COST_UPDATE .agent-msg__label { color: #424242; border-left-color: #757575; font-size: 10px; }
+.agent-msg--SYSTEM_INFO .agent-msg__label { color: #455A64; border-left-color: #78909C; font-size: 10px; }
+.agent-msg--WARNING .agent-msg__label { color: #F57F17; border-left-color: #FFC107; }
+.agent-msg--ERROR .agent-msg__label { color: #B71C1C; border-left-color: #D32F2F; font-weight: 700; }
+.agent-msg--DEBUG .agent-msg__label { color: #546E7A; border-left-color: #90A4AE; font-size: 10px; font-family: 'Consolas', monospace; }
+.agent-msg--SESSION_STARTED .agent-msg__label { color: #283593; border-left-color: #3949AB; }
+.agent-msg--SESSION_RESUMED .agent-msg__label { color: #3949AB; border-left-color: #5C6BC0; }
+.agent-msg--SESSION_ENDED .agent-msg__label { color: #4E342E; border-left-color: #8D6E63; }
+.agent-msg--AGENT_HANDOFF .agent-msg__label { color: #4A148C; border-left-color: #7B1FA2; }
+.agent-msg--AGENT_COLLABORATION .agent-msg__label { color: #4A148C; border-left-color: #9C27B0; }
+.agent-msg--CODE_BLOCK .agent-msg__label { color: #78909C; border-left-color: #78909C; }
+.agent-msg--CODE_BLOCK .agent-msg__body { font-family: 'Consolas', 'Monaco', monospace; font-size: 12px; color: #37474F; }
+.agent-msg--MARKDOWN .agent-msg__label { color: #616161; border-left-color: #BDBDBD; }
+.agent-msg--IMAGE_URL .agent-msg__label { color: #1565C0; border-left-color: #1976D2; }
+.agent-msg--FILE_REFERENCE .agent-msg__label { color: #3949AB; border-left-color: #5C6BC0; }
+.agent-msg--RATE_LIMIT_WARNING .agent-msg__label { color: #F9A825; border-left-color: #FFC107; }
+.agent-msg--THROTTLED .agent-msg__label { color: #F57F17; border-left-color: #FFA000; }
+.agent-msg--STREAM_START .agent-msg__label { color: #006064; border-left-color: #00BCD4; font-size: 10px; }
+.agent-msg--STREAM_END .agent-msg__label { color: #006064; border-left-color: #00ACC1; font-size: 10px; }
+.agent-msg--KEEPALIVE .agent-msg__label { color: #9E9E9E; border-left-color: #BDBDBD; font-size: 10px; }
+
+/* Streaming row: same bubble, no extra box */
+.agent-msg.agent-msg--streaming {
+    min-height: 24px;
+}
+
+.agent-msg--streaming .agent-msg__label { color: #087E8B; border-left-color: #087E8B; }
+
+.agent-msg--streaming .agent-msg__body {
+    display: block;
+}
+.agent-msg__body p:first-child { margin-top: 0; }
+.agent-msg__body p:last-child { margin-bottom: 0; }
+.agent-msg__body pre, .agent-msg__body code { font-family: 'Consolas', 'Monaco', monospace; }
+.agent-msg__body pre { overflow-x: auto; padding: 8px; border-radius: 4px; background: rgba(0,0,0,0.04); }
+
+.agent-msg--streaming .stream-cursor {
+    display: inline-block;
+    width: 2px;
+    height: 1em;
+    background: #087E8B;
+    animation: streamCursorBlink 1s step-end infinite;
+    vertical-align: text-bottom;
+    margin-left: 1px;
+}
+
+@keyframes streamCursorBlink {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0; }
+}
+
 .message-time {
     font-size: 11px;
     opacity: 0.7;
