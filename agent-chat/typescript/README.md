@@ -230,6 +230,66 @@ const response = await client.initiateConversation(
 - `CHAT_REQUEST` and `CHAT_RESPONSE` must alternate in the array
 - The first message can be either `CHAT_REQUEST` or `CHAT_RESPONSE`
 
+### Requesting approximate Ojas cost (usage tokens)
+
+**Ojas** is Jiva.ai’s measure of usage (tokens). You can ask the API to return an approximate Ojas cost per execution by setting `options.calculateOjas: true` on a conversation message. When this flag is `true`:
+
+- Each **Execution** in the response may include an **`approximateOjasCost`** string.
+- Over the socket, **COST_UPDATE** messages are also sent with cost information as the run progresses.
+
+If you omit `options` or set `calculateOjas` to `false` (the default), no cost data is returned.
+
+**Single-message request:**
+
+```typescript
+const response = await client.initiateConversation({
+  sessionId: 'user-123-thread-1',
+  message: 'Summarize this document',
+  mode: 'CHAT_REQUEST',
+  options: { calculateOjas: true },
+});
+
+if (response.data?.json.default.executions) {
+  for (const exec of response.data.json.default.executions) {
+    if (exec.approximateOjasCost) {
+      console.log(`Execution cost: ${exec.approximateOjasCost} Ojas`);
+    }
+  }
+}
+```
+
+**Conversation with context:**
+
+```typescript
+const response = await client.initiateConversation([
+  {
+    sessionId: 'user-123-thread-1',
+    message: 'Hello',
+    mode: 'CHAT_REQUEST',
+  },
+  {
+    sessionId: 'user-123-thread-1',
+    message: 'What will this cost?',
+    mode: 'CHAT_REQUEST',
+    options: { calculateOjas: true },
+  },
+]);
+```
+
+**Receiving cost over the socket:**
+
+When `calculateOjas` is `true`, subscribe to the session and handle `COST_UPDATE` in `onMessage`:
+
+```typescript
+client.subscribeToSocket('session-123', {
+  onMessage: (message) => {
+    if (message.types.includes('COST_UPDATE')) {
+      console.log('Cost update:', message.message);
+    }
+  },
+});
+```
+
 ### Handling Screen Responses
 
 Sometimes the agent requires additional assets (like files) to complete a request. When this happens, the response will have `mode: 'SCREEN_RESPONSE'` and include a `screens` array.
@@ -417,6 +477,7 @@ The socket can send various message types. Here are some common ones:
 - **FINAL_RESULT** - Final output from the pipeline
 - **PROGRESS_UPDATE** - Progress percentage or status
 - **TOKEN_USAGE** - Token consumption metrics
+- **COST_UPDATE** - Approximate Ojas (usage) cost; sent when the request used `options.calculateOjas: true`
 - **ERROR** - Error message with details
 - **KEEPALIVE** - Heartbeat to keep connection alive
 
@@ -852,9 +913,11 @@ Makes a POST request to the API.
 All TypeScript types are exported from the main entry point. Key types include:
 
 - `ApiConfig` - Client configuration
+- `ConversationMessageOptions` - Message options (e.g. `calculateOjas` for approximate Ojas cost)
 - `InitiateConversationRequest` - Single conversation message
 - `InitiateConversationWithContext` - Array of conversation messages
 - `ConversationResponse` - Response from conversation request
+- `Execution` - Single execution result (includes optional `approximateOjasCost` when `options.calculateOjas` was true)
 - `PollRequest` - Poll request payload
 - `PollResponse` - Poll response payload
 - `UploadResponse` - Upload response payload

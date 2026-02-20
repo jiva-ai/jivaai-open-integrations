@@ -77,6 +77,14 @@ export type ErrorCallback = (error: string, status?: number) => void;
 export type ConversationMode = 'CHAT_REQUEST' | 'CHAT_RESPONSE' | 'SCREEN_RESPONSE' | 'POLL_REQUEST';
 
 /**
+ * Options for a conversation message (e.g. request Ojas cost calculation)
+ */
+export interface ConversationMessageOptions {
+  /** When true, the execution may include approximate Ojas cost (default: false) */
+  calculateOjas?: boolean;
+}
+
+/**
  * Single conversation message item
  */
 export interface ConversationMessage {
@@ -92,6 +100,8 @@ export interface ConversationMessage {
   field?: string;
   /** Optional: assetId from uploaded asset for satisfying screen responses */
   assetId?: string;
+  /** Optional message options (e.g. calculateOjas; defaults to false when omitted) */
+  options?: ConversationMessageOptions;
 }
 
 /**
@@ -256,6 +266,8 @@ export interface Execution {
   type: ExecutionType;
   /** Execution data (structure depends on type) */
   data?: unknown;
+  /** Approximate Ojas cost (present when request options had calculateOjas: true) */
+  approximateOjasCost?: string;
 }
 
 /**
