@@ -663,10 +663,15 @@ export class JivaApiClient {
     const messages = validation.messages!;
     const sessionId = validation.sessionId!;
 
-    // Build the nested payload structure
-    const payload = {
+    // Build the nested payload structure; options (e.g. calculateOjas) go on each conversation message
+    const requestOptions = options.requestOptions && Object.keys(options.requestOptions).length > 0
+      ? options.requestOptions
+      : undefined;
+    const payload: Record<string, unknown> = {
       data: {
-        default: messages,
+        default: requestOptions
+          ? messages.map((m) => ({ ...m, options: requestOptions }))
+          : messages,
       },
     };
 

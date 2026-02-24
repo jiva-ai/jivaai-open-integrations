@@ -6,6 +6,7 @@ const defaultSettings = {
     chatWorkflowId: '',
     chatWorkflowVersion: '0',
     chatApiKey: '',
+    requestUsageStats: false,
     fileUploadCacheWorkflowId: '',
     fileUploadCacheVersion: '0',
     fileUploadCacheApiKey: '',
@@ -131,6 +132,7 @@ function updateSettingsUI() {
     document.getElementById('chatWorkflowId').value = settings.chatWorkflowId || '';
     document.getElementById('chatWorkflowVersion').value = settings.chatWorkflowVersion || '0';
     document.getElementById('chatApiKey').value = settings.chatApiKey || '';
+    document.getElementById('requestUsageStats').checked = !!settings.requestUsageStats;
     document.getElementById('fileUploadCacheWorkflowId').value = settings.fileUploadCacheWorkflowId || '';
     document.getElementById('fileUploadCacheVersion').value = settings.fileUploadCacheVersion || '0';
     document.getElementById('fileUploadCacheApiKey').value = settings.fileUploadCacheApiKey || '';
@@ -173,6 +175,7 @@ function loadSettingsFromForm() {
         chatWorkflowId: document.getElementById('chatWorkflowId').value,
         chatWorkflowVersion: document.getElementById('chatWorkflowVersion').value || '0',
         chatApiKey: document.getElementById('chatApiKey').value,
+        requestUsageStats: document.getElementById('requestUsageStats').checked,
         fileUploadCacheWorkflowId: document.getElementById('fileUploadCacheWorkflowId').value,
         fileUploadCacheVersion: document.getElementById('fileUploadCacheVersion').value || '0',
         fileUploadCacheApiKey: document.getElementById('fileUploadCacheApiKey').value,
@@ -820,6 +823,7 @@ async function handleScreenResponse(responseData) {
                                 nodeId,
                                 field,
                                 assetId,
+                                requestUsageStats: !!settings.requestUsageStats,
                             }),
                         });
 
@@ -1723,6 +1727,7 @@ async function sendMessage() {
                     nodeId,
                     field,
                     assetId,
+                    requestUsageStats: !!settings.requestUsageStats,
                 }),
             });
 
@@ -1822,6 +1827,7 @@ async function sendMessage() {
                 message,
                 sessionId: currentSessionId,
                 settings,
+                requestUsageStats: !!settings.requestUsageStats,
             }),
         });
 

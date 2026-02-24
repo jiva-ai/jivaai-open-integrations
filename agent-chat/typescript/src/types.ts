@@ -373,6 +373,14 @@ export interface ConversationResponse {
 }
 
 /**
+ * Options for the conversation API request (top-level payload)
+ */
+export interface ConversationRequestOptions {
+  /** When true, the execution may include approximate Ojas/usage stats (default: false) */
+  calculateOjas?: boolean;
+}
+
+/**
  * Options for polling when state is RUNNING
  */
 export interface PollingOptions {
@@ -380,6 +388,8 @@ export interface PollingOptions {
   maxAttempts?: number;
   /** Delay between polling attempts in milliseconds (recommended: 1000ms) */
   pollInterval?: number;
+  /** Optional request-level options (e.g. calculateOjas) to send in the invoke payload */
+  requestOptions?: ConversationRequestOptions;
 }
 
 /**

@@ -59,7 +59,7 @@ function getClient(settings) {
  */
 app.post('/api/chat', async (req, res) => {
   try {
-    const { message, sessionId, settings, mode, nodeId, field, assetId } = req.body;
+    const { message, sessionId, settings, mode, nodeId, field, assetId, requestUsageStats } = req.body;
 
     if (!message || !sessionId) {
       return res.status(400).json({ error: 'message and sessionId are required' });
@@ -87,8 +87,23 @@ app.post('/api/chat', async (req, res) => {
       conversationRequest.assetId = assetId;
     }
 
+    const calculateOjas = !!(requestUsageStats ?? settings?.requestUsageStats);
+    const pollingOptions = calculateOjas
+      ? { requestOptions: { calculateOjas } }
+      : {};
+
+    // Build the exact payload sent to the API (for logging); options go on each conversation message
+    const apiPayload = {
+      data: {
+        default: [
+          { ...conversationRequest, ...(calculateOjas ? { options: { calculateOjas } } : {}) },
+        ],
+      },
+    };
+    console.log('[API Request Body]\n' + JSON.stringify(apiPayload, null, 2));
+
     // Initiate conversation
-    const response = await client.initiateConversation(conversationRequest);
+    const response = await client.initiateConversation(conversationRequest, pollingOptions);
 
     if (response.error) {
       return res.status(response.status || 500).json({ error: response.error });
