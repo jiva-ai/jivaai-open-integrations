@@ -20,6 +20,8 @@ const defaultSettings = {
 };
 
 let settings = { ...defaultSettings };
+/** Mirrors server `--debug`: verbose Debug Log, SSE/API payload details, and browser console mirroring. */
+let jivaDebugMode = false;
 let currentSessionId = `session-${Date.now()}`;
 let currentSSEConnection = null;
 /** Session id for the active SSE connection; reuse connection when same session to avoid aborting mid-stream */
@@ -271,8 +273,12 @@ function expandJsonStringsForDisplay(obj) {
     return obj;
 }
 
-// Add entry to debug log
+// Add entry to debug log (type "debug" entries only when server was started with --debug)
 function addDebugLog(type, title, data) {
+    if (type === 'debug' && !jivaDebugMode) {
+        return;
+    }
+
     const entry = document.createElement('div');
     entry.className = `debug-entry ${type}`;
     
@@ -349,6 +355,17 @@ function addDebugLog(type, title, data) {
     
     debugLog.appendChild(entry);
     debugLog.scrollTop = debugLog.scrollHeight;
+
+    if (jivaDebugMode) {
+        const prefix = '[Jiva Agent Chat]';
+        if (type === 'error') {
+            console.error(prefix, title, data !== undefined ? data : '');
+        } else if (type === 'warn') {
+            console.warn(prefix, title, data !== undefined ? data : '');
+        } else {
+            console.log(prefix, title, data !== undefined ? data : '');
+        }
+    }
 }
 
 // Clear debug log
@@ -1457,7 +1474,7 @@ function connectSSE(sessionId) {
                         }
                     }
 
-                    addDebugLog('info', 'SSE Event Details', {
+                    addDebugLog('debug', 'SSE Event Details', {
                         sessionId: sessionId,
                         eventName: eventName,
                         eventData: eventData,
@@ -1490,6 +1507,7 @@ function connectSSE(sessionId) {
                                 hasMessage: !!message.message,
                                 messagePreview: message.message ? message.message.substring(0, 100) : null
                             });
+                            addDebugLog('debug', 'SSE Message Full Payload', message);
                             handleSocketMessage(message);
                         } catch (error) {
                             console.error('Failed to parse SSE message:', error);
@@ -2005,8 +2023,33 @@ clearDebugBtn.addEventListener('click', () => {
     }
 });
 
-// Initialize
-loadSettings();
-messageInput.focus();
-addDebugLog('info', 'Application Started', 'Debug log initialized');
+// Initialize (fetch server debug flag so UI matches `node server.js --debug`)
+(async function initApp() {
+    try {
+        const r = await fetch('/api/app-config');
+        if (r.ok) {
+            const cfg = await r.json();
+            jivaDebugMode = !!cfg.debug;
+        }
+    } catch (_) {
+        jivaDebugMode = false;
+    }
+
+    loadSettings();
+    messageInput.focus();
+
+    if (jivaDebugMode && debugPanel && toggleDebugBtn) {
+        debugPanel.classList.remove('collapsed');
+        toggleDebugBtn.textContent = '◀';
+        toggleDebugBtn.title = 'Collapse Debug Panel';
+    }
+
+    addDebugLog(
+        'info',
+        'Application Started',
+        jivaDebugMode
+            ? 'Verbose debug enabled (server started with --debug): extra SSE/API payload entries and browser console mirroring.'
+            : 'Start the example server with --debug for verbose connection and payload logging in this panel and in the terminal.'
+    );
+})();
 

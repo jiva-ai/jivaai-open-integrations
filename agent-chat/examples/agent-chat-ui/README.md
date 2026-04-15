@@ -52,7 +52,34 @@ Or run in development mode with auto-reload:
 npm run dev
 ```
 
-The application will be available at `http://localhost:3000`
+The application will be available at `http://localhost:3000` (or pass a port as the first numeric argument, e.g. `npm start -- 4000`).
+
+### Debug mode (`--debug`)
+
+For connection issues (REST invoke, SSE stream) and payload problems, start the server with **`--debug`** (or **`-d`**):
+
+```bash
+node server.js --debug
+# or with a custom port:
+node server.js 4000 --debug
+```
+
+NPM shortcuts:
+
+```bash
+npm run start:debug
+npm run dev:debug
+```
+
+You can also set **`JIVA_DEBUG=1`** or **`DEBUG=true`** in the environment instead of the flag.
+
+With debug enabled:
+
+- **Terminal**: logs each proxied request (masked API keys), full JSON sent to `initiateConversation` / poll, upload sizes, and SDK `debug`-level logs (URLs, payloads, responses).
+- **Debug Log panel**: shows extra entries (SSE chunks, raw event text, full per-message payloads, poll “still running” noise, etc.) and opens the panel expanded on load.
+- **Browser console**: mirrors each Debug Log line under the prefix `[Jiva Agent Chat]`.
+
+Without `--debug`, the UI keeps high-signal request/response/error lines and hides the noisiest `debug`-type rows.
 
 ## Configuration
 
