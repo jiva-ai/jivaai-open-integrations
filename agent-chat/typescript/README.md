@@ -7,8 +7,8 @@ A comprehensive TypeScript SDK for integrating with Jiva.ai's agentic workflows.
 - 🤖 **Full Agentic Workflow Integration** - Seamlessly interact with Jiva.ai's agentic workflows
 - 💬 **Conversational Interface** - Support for multi-turn conversations with context
 - 📤 **Asset Upload Support** - Upload files, text, and tables to satisfy agent requirements
-- 🔄 **Automatic Polling** - Handles async workflow execution with automatic polling
-- 📡 **Real-Time Updates** - Subscribe to live agent updates via Server-Sent Events (SSE)
+- 📡 **Real-Time Updates (Preferred)** - Subscribe to live agent updates via Server-Sent Events (SSE)
+- 🔄 **Polling Fallback** - Optional polling support for environments where streaming is unavailable
 - 🎯 **Type-Safe** - Full TypeScript support with comprehensive type definitions
 - 📝 **Built-in Logging** - Configurable logging for debugging and monitoring
 
@@ -112,8 +112,8 @@ if (response.error) {
 }
 ```
 
-That's it! The SDK automatically handles:
-- ✅ Async workflow execution (polling when state is `RUNNING`)
+That's it! The SDK supports:
+- ✅ Async workflow execution (**streaming is recommended**; polling remains available)
 - ✅ Error handling
 - ✅ Response parsing
 
@@ -127,7 +127,7 @@ The Jiva.ai Agent Chat SDK communicates with Jiva.ai's agentic workflow engine t
 2. **Upload Cache Workflows** - Store uploaded assets (files, text, tables) that agents can reference
 3. **EventSource (SSE)** - Provides real-time updates during agent processing
 
-### Request Flow
+### Request Flow (preferred: stream-first)
 
 ```
 ┌─────────────┐
@@ -153,14 +153,12 @@ The Jiva.ai Agent Chat SDK communicates with Jiva.ai's agentic workflow engine t
 │   • ERROR               │
 └──────┬──────────────────┘
        │
-       │ 3. If RUNNING, auto-poll
-       ▼
-┌─────────────────────────┐
-│ Polling (automatic)     │
-│ - Polls every 1s        │
-│ - Max 30 attempts       │
-│ - Returns when complete │
-└─────────────────────────┘
+       ├─ 3a. Preferred: subscribe to stream
+       │      POST /workflow-chat/{workflowId}/{sessionId}
+       │      Receive SSE events: CONTENT_DELTA, PROGRESS, FINAL_RESULT
+       │
+       └─ 3b. Fallback: poll invoke endpoint with POLL_REQUEST
+              (typically ~1s cadence, bounded attempts)
 ```
 
 ### Response States
@@ -168,7 +166,7 @@ The Jiva.ai Agent Chat SDK communicates with Jiva.ai's agentic workflow engine t
 The API returns responses with different states:
 
 - **OK** - Request processed immediately, result is available
-- **RUNNING** - Request is being processed asynchronously (SDK automatically polls)
+- **RUNNING** - Request is being processed asynchronously (prefer stream updates; poll only as fallback)
 - **PARTIAL_OK** - Partial results are available
 - **ERROR** - Request failed with an error
 
@@ -417,6 +415,8 @@ if (response.data?.json.default.mode === 'SCREEN_RESPONSE') {
 
 Subscribe to real-time updates from the agent using Server-Sent Events (SSE). This allows you to receive live updates as the agent processes requests, including thinking messages, execution results, and progress updates.
 
+**Best practice:** open/maintain the stream for the `sessionId` and treat it as the primary source of in-flight progress. Keep polling for compatibility or constrained environments where streaming cannot be used.
+
 ```typescript
 // Subscribe to real-time updates for a session
 const es = client.subscribeToSocket(
@@ -521,9 +521,9 @@ const es = client.subscribeToSocket('session-123', {
 - API endpoints follow the pattern: `{baseUrl}/{workflowId}/{version}/invoke` where version defaults to "0"
 - For test environments, you can set custom `baseUrl` and version numbers in the client configuration
 
-### Manual Polling
+### Manual Polling (fallback path)
 
-If you need to manually poll for a result (e.g., for multiple IDs simultaneously), you can use the `poll()` method:
+If you cannot rely on streaming in your environment, you can manually poll for a result (e.g., for multiple IDs simultaneously) using `poll()`:
 
 ```typescript
 // Poll for a specific execution ID
@@ -571,7 +571,7 @@ if (pollResponse.error) {
 }
 ```
 
-**Note**: Only 1 sessionId can be polled per call. If you need to poll multiple IDs, make separate API calls simultaneously. The recommended polling frequency is 1 second to avoid being blacklisted.
+**Note**: Only 1 sessionId can be polled per call. If you need to poll multiple IDs, make separate API calls simultaneously. The recommended polling frequency is around 1 second to avoid throttling/blacklisting.
 
 ### Checking Completion Status
 

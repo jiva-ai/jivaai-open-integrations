@@ -62,6 +62,34 @@ Treat **`state`** as the lifecycle of that **invoke** (and, when polling, of the
 
 **Summary sequence:** configure keys and URLs → **(optional but recommended)** open **`workflow-chat`** for `sessionId` → **invoke** chat turns → on **`RUNNING`**, prefer stream updates and/or **poll** with **`id`** → on **`SCREEN_RESPONSE`**, **upload** then **invoke** with screen fields → repeat until **`OK`**, **`PARTIAL_OK`**, or **`ERROR`**.
 
+### Sequence diagram (stream-first, poll-fallback)
+
+```text
+┌─────────────┐
+│ Your App    │
+└──────┬──────┘
+       │ 1) Choose / persist sessionId (thread id)
+       │ 2) (Preferred) Open stream:
+       │    POST /workflow-chat/{workflowId}/{sessionId}
+       ▼
+┌─────────────────────────┐
+│ Jiva.ai Chat API        │
+└──────┬──────────────────┘
+       │ 3) Send turn:
+       │    POST /workflow/{workflowId}/{version}/invoke
+       │    data.default[] with CHAT_REQUEST
+       ▼
+┌─────────────────────────┐
+│ Response state          │
+│ - OK / PARTIAL_OK       │──► consume final payload
+│ - SCREEN_RESPONSE       │──► upload asset, then invoke with nodeId/field/assetId
+│ - RUNNING               │──► continue from stream (preferred)
+└──────┬──────────────────┘
+       │
+       └─► Fallback only: POST POLL_REQUEST with { sessionId, id, mode }
+            until terminal state (OK / PARTIAL_OK / ERROR)
+```
+
 ---
 
 ## Transport overview
