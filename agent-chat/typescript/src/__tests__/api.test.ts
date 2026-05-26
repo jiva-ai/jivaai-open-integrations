@@ -1302,6 +1302,212 @@ describe('JivaApiClient', () => {
         expect(onSuccess).toHaveBeenCalledWith(screenResponse, 200);
       });
     });
+
+    describe('resource hints', () => {
+      it('should serialize resourceHints as a JSON string in single message payload', async () => {
+        (global.fetch as jest.Mock).mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          json: async () => mockConversationResponse,
+        });
+
+        const client = new JivaApiClient(mockConfig);
+        await client.initiateConversation({
+          sessionId: 'session-123',
+          message: 'Use my uploaded sales dataset to answer this',
+          mode: 'CHAT_REQUEST',
+          resourceHints: [
+            { id: 'uploaded-dataset-id', type: 'DATASET' },
+            { id: 'api-credential-id', type: 'AUTHENTICATION' },
+          ],
+        });
+
+        expect(global.fetch).toHaveBeenCalledWith(
+          'https://api.jiva.ai/public-api/workflow/test-workflow-id/0/invoke',
+          expect.objectContaining({
+            method: 'POST',
+            body: JSON.stringify({
+              data: {
+                default: [
+                  {
+                    sessionId: 'session-123',
+                    message: 'Use my uploaded sales dataset to answer this',
+                    mode: 'CHAT_REQUEST',
+                    resourceHints: JSON.stringify([
+                      { id: 'uploaded-dataset-id', type: 'DATASET' },
+                      { id: 'api-credential-id', type: 'AUTHENTICATION' },
+                    ]),
+                  },
+                ],
+              },
+            }),
+          })
+        );
+      });
+
+      it('should serialize resourceHints with all four hint types', async () => {
+        (global.fetch as jest.Mock).mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          json: async () => mockConversationResponse,
+        });
+
+        const client = new JivaApiClient(mockConfig);
+        const hints = [
+          { id: 'dataset-mongo-id', type: 'DATASET' as const },
+          { id: 'dynamodb-table-mongo-id', type: 'DATABASE' as const },
+          { id: 's3-vector-index-mongo-id', type: 'VECTOR_DATABASE' as const },
+          { id: 'project-api-credential-id', type: 'AUTHENTICATION' as const },
+        ];
+
+        await client.initiateConversation({
+          sessionId: 'session-123',
+          message: 'Analyze data with all resources',
+          mode: 'CHAT_REQUEST',
+          resourceHints: hints,
+        });
+
+        const fetchCall = (global.fetch as jest.Mock).mock.calls[0];
+        const body = JSON.parse(fetchCall[1].body);
+        expect(body.data.default[0].resourceHints).toBe(JSON.stringify(hints));
+      });
+
+      it('should serialize resourceHints in context array messages', async () => {
+        (global.fetch as jest.Mock).mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          json: async () => mockConversationResponse,
+        });
+
+        const hints = [{ id: 'dataset-id', type: 'DATASET' as const }];
+
+        const client = new JivaApiClient(mockConfig);
+        await client.initiateConversation([
+          {
+            sessionId: 'session-123',
+            message: 'Hello',
+            mode: 'CHAT_REQUEST',
+            resourceHints: hints,
+          },
+          {
+            sessionId: 'session-123',
+            message: 'ok',
+            mode: 'CHAT_RESPONSE',
+          },
+          {
+            sessionId: 'session-123',
+            message: 'Use my dataset',
+            mode: 'CHAT_REQUEST',
+            resourceHints: hints,
+          },
+        ]);
+
+        const fetchCall = (global.fetch as jest.Mock).mock.calls[0];
+        const body = JSON.parse(fetchCall[1].body);
+        const messages = body.data.default;
+
+        expect(messages[0].resourceHints).toBe(JSON.stringify(hints));
+        expect(messages[1].resourceHints).toBeUndefined();
+        expect(messages[2].resourceHints).toBe(JSON.stringify(hints));
+      });
+
+      it('should omit resourceHints from payload when not provided (backward compatibility)', async () => {
+        (global.fetch as jest.Mock).mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          json: async () => mockConversationResponse,
+        });
+
+        const client = new JivaApiClient(mockConfig);
+        await client.initiateConversation({
+          sessionId: 'session-123',
+          message: 'No hints here',
+          mode: 'CHAT_REQUEST',
+        });
+
+        const fetchCall = (global.fetch as jest.Mock).mock.calls[0];
+        const body = JSON.parse(fetchCall[1].body);
+        expect(body.data.default[0].resourceHints).toBeUndefined();
+      });
+
+      it('should omit resourceHints from payload when array is empty', async () => {
+        (global.fetch as jest.Mock).mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          json: async () => mockConversationResponse,
+        });
+
+        const client = new JivaApiClient(mockConfig);
+        await client.initiateConversation({
+          sessionId: 'session-123',
+          message: 'Empty hints array',
+          mode: 'CHAT_REQUEST',
+          resourceHints: [],
+        });
+
+        const fetchCall = (global.fetch as jest.Mock).mock.calls[0];
+        const body = JSON.parse(fetchCall[1].body);
+        expect(body.data.default[0].resourceHints).toBeUndefined();
+      });
+
+      it('should combine resourceHints with requestOptions', async () => {
+        (global.fetch as jest.Mock).mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          json: async () => mockConversationResponse,
+        });
+
+        const hints = [{ id: 'dataset-id', type: 'DATASET' as const }];
+
+        const client = new JivaApiClient(mockConfig);
+        await client.initiateConversation(
+          {
+            sessionId: 'session-123',
+            message: 'Calculate cost with hints',
+            mode: 'CHAT_REQUEST',
+            resourceHints: hints,
+          },
+          { requestOptions: { calculateOjas: true } }
+        );
+
+        const fetchCall = (global.fetch as jest.Mock).mock.calls[0];
+        const body = JSON.parse(fetchCall[1].body);
+        const msg = body.data.default[0];
+
+        expect(msg.resourceHints).toBe(JSON.stringify(hints));
+        expect(msg.options).toEqual({ calculateOjas: true });
+      });
+
+      it('should combine resourceHints with screen satisfaction fields', async () => {
+        (global.fetch as jest.Mock).mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          json: async () => mockConversationResponse,
+        });
+
+        const hints = [{ id: 'credential-id', type: 'AUTHENTICATION' as const }];
+
+        const client = new JivaApiClient(mockConfig);
+        await client.initiateConversation({
+          sessionId: 'session-123',
+          message: 'Satisfy screen with hints',
+          mode: 'CHAT_REQUEST',
+          nodeId: 'node-1',
+          field: 'file-field',
+          assetId: 'asset-1',
+          resourceHints: hints,
+        });
+
+        const fetchCall = (global.fetch as jest.Mock).mock.calls[0];
+        const body = JSON.parse(fetchCall[1].body);
+        const msg = body.data.default[0];
+
+        expect(msg.nodeId).toBe('node-1');
+        expect(msg.field).toBe('file-field');
+        expect(msg.assetId).toBe('asset-1');
+        expect(msg.resourceHints).toBe(JSON.stringify(hints));
+      });
+    });
   });
 
   describe('poll', () => {

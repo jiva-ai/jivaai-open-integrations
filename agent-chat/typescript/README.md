@@ -288,6 +288,66 @@ client.subscribeToSocket('session-123', {
 });
 ```
 
+### Resource Hints
+
+Resource hints let you tell the agentic screening flow to **auto-fill workflow requirements** using platform resources that already exist in your project, so the agent can skip asking for them interactively.
+
+Each hint is a `{ id, type }` pair where `type` identifies the kind of resource and `id` is its platform Mongo ID:
+
+| `type` | Resource collection | Which ID to use |
+|--------|--------------------|--------------------|
+| `DATASET` | Uploaded dataset | `UploadedDataset.id` (the uploaded-dataset Mongo ID, **not** the underlying S3 dataset ID) |
+| `DATABASE` | NoSQL / DynamoDB table | `JivaDynamoDBTable.id` |
+| `VECTOR_DATABASE` | S3 vector index | `JivaS3VectorIndex.id` (even though some backend params use `indexUUID`) |
+| `AUTHENTICATION` | Project API credential | `ProjectApiCredential.id` |
+
+**Single-message request with hints:**
+
+```typescript
+const response = await client.initiateConversation({
+  sessionId: 'session-123',
+  message: 'Use my uploaded sales dataset and CRM credentials to answer this.',
+  mode: 'CHAT_REQUEST',
+  resourceHints: [
+    { id: 'uploaded-dataset-id', type: 'DATASET' },
+    { id: 'api-credential-id', type: 'AUTHENTICATION' },
+  ],
+});
+```
+
+**Context array with hints:**
+
+```typescript
+const response = await client.initiateConversation([
+  {
+    sessionId: 'session-123',
+    message: 'Analyze quarterly revenue',
+    mode: 'CHAT_REQUEST',
+    resourceHints: [
+      { id: 'dataset-mongo-id', type: 'DATASET' },
+      { id: 'dynamodb-table-mongo-id', type: 'DATABASE' },
+      { id: 's3-vector-index-mongo-id', type: 'VECTOR_DATABASE' },
+      { id: 'project-api-credential-id', type: 'AUTHENTICATION' },
+    ],
+  },
+  {
+    sessionId: 'session-123',
+    message: 'ok',
+    mode: 'CHAT_RESPONSE',
+  },
+  {
+    sessionId: 'session-123',
+    message: 'Now break it down by region',
+    mode: 'CHAT_REQUEST',
+  },
+]);
+```
+
+**Important notes:**
+- `resourceHints` is optional. Omitting it (or passing an empty array) behaves exactly like before — no hints are sent.
+- The SDK JSON-stringifies the array into a single `resourceHints` column in the outgoing dataset payload; you do **not** need to stringify it yourself.
+- Hints only affect the server-side screening step. If the agent's workflow does not require the hinted resource, the hint is ignored.
+
 ### Handling Screen Responses
 
 Sometimes the agent requires additional assets (like files) to complete a request. When this happens, the response will have `mode: 'SCREEN_RESPONSE'` and include a `screens` array.
@@ -918,6 +978,8 @@ All TypeScript types are exported from the main entry point. Key types include:
 - `InitiateConversationWithContext` - Array of conversation messages
 - `ConversationResponse` - Response from conversation request
 - `Execution` - Single execution result (includes optional `approximateOjasCost` when `options.calculateOjas` was true)
+- `ResourceHint` - A resource hint (`{ id, type }`) for auto-filling workflow requirements
+- `ResourceHintType` - Allowed hint types: `'DATASET' | 'DATABASE' | 'VECTOR_DATABASE' | 'AUTHENTICATION'`
 - `PollRequest` - Poll request payload
 - `PollResponse` - Poll response payload
 - `UploadResponse` - Upload response payload

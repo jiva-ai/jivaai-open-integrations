@@ -23,6 +23,7 @@ import {
   SocketOptions,
   SocketCallbacks,
   Logger,
+  ResourceHint,
 } from './types';
 import { createLogger } from './logger';
 
@@ -550,8 +551,8 @@ export class JivaApiClient {
    */
   private validateAndNormalizeMessages(
     request: InitiateConversationRequest | InitiateConversationWithContext
-  ): { error?: string; messages?: Array<{ sessionId: string; message: string; mode: string; nodeId?: string; field?: string; assetId?: string }>; sessionId?: string } {
-    let messages: Array<{ sessionId: string; message: string; mode: string; nodeId?: string; field?: string; assetId?: string }>;
+  ): { error?: string; messages?: Array<{ sessionId: string; message: string; mode: string; nodeId?: string; field?: string; assetId?: string; resourceHints?: ResourceHint[] }>; sessionId?: string } {
+    let messages: Array<{ sessionId: string; message: string; mode: string; nodeId?: string; field?: string; assetId?: string; resourceHints?: ResourceHint[] }>;
     let sessionId: string;
 
     // Handle single message or array of messages
@@ -567,6 +568,7 @@ export class JivaApiClient {
         nodeId: msg.nodeId,
         field: msg.field,
         assetId: msg.assetId,
+        resourceHints: msg.resourceHints,
       }));
       sessionId = request[0].sessionId;
 
@@ -616,13 +618,14 @@ export class JivaApiClient {
       }
 
       sessionId = request.sessionId;
-      const messagePayload: { sessionId: string; message: string; mode: string; nodeId?: string; field?: string; assetId?: string } = {
+      const messagePayload: { sessionId: string; message: string; mode: string; nodeId?: string; field?: string; assetId?: string; resourceHints?: ResourceHint[] } = {
         sessionId: request.sessionId,
         message: request.message,
         mode: request.mode, // Preserve SCREEN_RESPONSE for single messages
         nodeId: request.nodeId,
         field: request.field,
         assetId: request.assetId,
+        resourceHints: request.resourceHints,
       };
       
       // Validate screen satisfaction fields: if any are provided, all must be provided
@@ -663,15 +666,25 @@ export class JivaApiClient {
     const messages = validation.messages!;
     const sessionId = validation.sessionId!;
 
-    // Build the nested payload structure; options (e.g. calculateOjas) go on each conversation message
+    // Build the nested payload structure; options (e.g. calculateOjas) go on each conversation message.
+    // resourceHints are JSON-stringified for the backend dataset column.
     const requestOptions = options.requestOptions && Object.keys(options.requestOptions).length > 0
       ? options.requestOptions
       : undefined;
+    const serializeMessage = (m: typeof messages[number]) => {
+      const { resourceHints, ...rest } = m;
+      const out: Record<string, unknown> = { ...rest };
+      if (requestOptions) {
+        out.options = requestOptions;
+      }
+      if (resourceHints && resourceHints.length > 0) {
+        out.resourceHints = JSON.stringify(resourceHints);
+      }
+      return out;
+    };
     const payload: Record<string, unknown> = {
       data: {
-        default: requestOptions
-          ? messages.map((m) => ({ ...m, options: requestOptions }))
-          : messages,
+        default: messages.map(serializeMessage),
       },
     };
 

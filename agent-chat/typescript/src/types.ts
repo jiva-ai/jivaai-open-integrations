@@ -72,6 +72,32 @@ export type SuccessCallback<T = unknown> = (data: T, status: number) => void;
 export type ErrorCallback = (error: string, status?: number) => void;
 
 /**
+ * Allowed resource hint types for agentic chat requests.
+ * Each type maps to a specific platform resource collection.
+ */
+export type ResourceHintType = 'DATASET' | 'DATABASE' | 'VECTOR_DATABASE' | 'AUTHENTICATION';
+
+/**
+ * A resource hint tells the server-side agentic screening flow to auto-fill
+ * workflow requirements using an existing platform resource.
+ *
+ * @example
+ * { id: 'uploaded-dataset-mongo-id', type: 'DATASET' }
+ */
+export interface ResourceHint {
+  /** Platform resource Mongo ID (see type-specific semantics below) */
+  id: string;
+  /**
+   * Resource kind:
+   * - `DATASET` — `UploadedDataset.id` (the uploaded-dataset Mongo ID, not the S3 dataset ID)
+   * - `DATABASE` — `JivaDynamoDBTable.id` (NoSQL / DynamoDB table Mongo ID)
+   * - `VECTOR_DATABASE` — `JivaS3VectorIndex.id` (S3 vector-index Mongo ID)
+   * - `AUTHENTICATION` — `ProjectApiCredential.id` (project API credential Mongo ID)
+   */
+  type: ResourceHintType;
+}
+
+/**
  * Conversation mode types
  */
 export type ConversationMode = 'CHAT_REQUEST' | 'CHAT_RESPONSE' | 'SCREEN_RESPONSE' | 'POLL_REQUEST';
@@ -102,6 +128,8 @@ export interface ConversationMessage {
   assetId?: string;
   /** Optional message options (e.g. calculateOjas; defaults to false when omitted) */
   options?: ConversationMessageOptions;
+  /** Optional resource hints to auto-fill workflow requirements with existing platform resources */
+  resourceHints?: ResourceHint[];
 }
 
 /**
@@ -120,6 +148,8 @@ export interface InitiateConversationRequest {
   field?: string;
   /** Optional: assetId from uploaded asset for satisfying screen responses */
   assetId?: string;
+  /** Optional resource hints to auto-fill workflow requirements with existing platform resources */
+  resourceHints?: ResourceHint[];
 }
 
 /**

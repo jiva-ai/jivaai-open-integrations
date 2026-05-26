@@ -171,10 +171,44 @@ Each element of `data.default` is an object with at least:
 | `field` | For screen follow-up | From `screens[].field` |
 | `assetId` | For screen follow-up | From upload cache `strings.default` after uploading the requested asset |
 | `options` | No | e.g. `{ "calculateOjas": true }` to request approximate usage/cost where supported |
+| `resourceHints` | No | JSON-encoded string of resource hint objects (see Resource Hints below) |
 
 **Context (multi-turn) requests:** Send **multiple** objects in `data.default` representing alternating user and assistant turns. Client-side rules in the reference SDK are: same `sessionId` for every row; modes must alternate **`CHAT_REQUEST`** and **`CHAT_RESPONSE`**; when satisfying a screen, **`nodeId`**, **`field`**, and **`assetId`** must all be present together.
 
 **Optional top-level request options:** The TypeScript client can attach the same `options` object to **each** message in the batch when you configure request-level options (e.g. `calculateOjas`).
+
+### Resource hints
+
+Resource hints allow a client to tell the server-side agentic screening flow which existing platform resources to use, so the agent can auto-fill workflow requirements instead of prompting the user interactively.
+
+The `resourceHints` column is a **JSON-encoded string** representing an array of hint objects:
+
+```json
+[
+  { "id": "uploaded-dataset-mongo-id", "type": "DATASET" },
+  { "id": "dynamodb-table-mongo-id",   "type": "DATABASE" },
+  { "id": "s3-vector-index-mongo-id",  "type": "VECTOR_DATABASE" },
+  { "id": "project-api-credential-id", "type": "AUTHENTICATION" }
+]
+```
+
+Each object has two fields:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `id` | string | Platform Mongo ID of the resource (see ID semantics below) |
+| `type` | string | One of `DATASET`, `DATABASE`, `VECTOR_DATABASE`, `AUTHENTICATION` |
+
+**ID semantics by type:**
+
+| `type` | Which ID to use |
+|--------|----------------|
+| `DATASET` | `UploadedDataset.id` — the uploaded-dataset Mongo ID, **not** the underlying S3 dataset ID |
+| `DATABASE` | `JivaDynamoDBTable.id` — the NoSQL / DynamoDB table Mongo ID |
+| `VECTOR_DATABASE` | `JivaS3VectorIndex.id` — the S3 vector-index Mongo ID (even if some backend node params use `indexUUID`) |
+| `AUTHENTICATION` | `ProjectApiCredential.id` — the project API credential Mongo ID |
+
+The field is optional. When absent or empty, the request behaves as before — no resource pre-filling occurs. Hints for resource types not required by the workflow are silently ignored.
 
 ---
 
