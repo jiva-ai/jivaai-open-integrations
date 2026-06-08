@@ -368,8 +368,10 @@ The response is **SSE** (`text/event-stream`): frames with `event:` and `data:` 
 |--------|-------------|
 | `workflowId` | Chat workflow id |
 | `sessionId` | Same session as invoke |
-| `message` | Text (e.g. delta, status, or error text) |
+| `message` | Payload for the event. Usually text (e.g. delta, status, or error text), but some event types carry JSON detail payloads. |
 | `types` | Array of event type strings (e.g. `CONTENT_DELTA`, `AGENT_COMPLETED`, `ERROR`, `KEEPALIVE`, …) |
+
+`USER_INPUT_DETAIL` events carry the structured screening payload as JSON so clients can inspect the fields the agent is asking for. These detail payloads are intended for application logic/debugging and should not be rendered as assistant text to the end user.
 
 The authoritative list of `types` values used by the platform should be taken from the SDK’s type definitions (see [TypeScript `SocketMessageType`](./typescript/src/types.ts)) when generating code.
 

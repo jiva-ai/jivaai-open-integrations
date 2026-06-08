@@ -497,6 +497,9 @@ const es = client.subscribeToSocket(
       } else if (message.types.includes('CONTENT_DELTA')) {
         // Streaming content
         process.stdout.write(message.message);
+      } else if (message.types.includes('USER_INPUT_DETAIL')) {
+        // Structured screening payload; use for app logic if needed, not as chat text.
+        return;
       } else if (message.types.includes('FINAL_RESULT')) {
         console.log('Final result:', message.message);
       }
@@ -535,6 +538,7 @@ The socket can send various message types. Here are some common ones:
 - **EXECUTION_CALL_STARTED** - Agent is invoking a pipeline
 - **EXECUTION_CALL_RESULT** - Result from an execution
 - **FINAL_RESULT** - Final output from the pipeline
+- **USER_INPUT_DETAIL** - Structured screening payload as JSON; useful for application logic/debugging, but not intended to be displayed as user-facing chat text
 - **PROGRESS_UPDATE** - Progress percentage or status
 - **TOKEN_USAGE** - Token consumption metrics
 - **COST_UPDATE** - Approximate Ojas (usage) cost; sent when the request used `options.calculateOjas: true`

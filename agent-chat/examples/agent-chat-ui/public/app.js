@@ -43,6 +43,7 @@ const STREAMING_WORD_MS = 28;
 /** Queue of socket messages to show one-at-a-time in the thinking bubble */
 let socketMessageQueue = [];
 let socketQueueBusy = false;
+const HIDDEN_SOCKET_MESSAGE_TYPES = new Set(['USER_INPUT_DETAIL']);
 
 // Socket message type display labels (Java enum names → short label)
 const SOCKET_TYPE_LABELS = {
@@ -1338,6 +1339,7 @@ function connectSSE(sessionId) {
             const msg = String(message.message ?? message.msg ?? message.text ?? '').trim();
 
             if (types.includes('KEEPALIVE')) return;
+            if (types.some((type) => HIDDEN_SOCKET_MESSAGE_TYPES.has(type))) return;
 
             const isFinalResponse = types.includes('CONTENT_COMPLETE') || types.includes('FINAL_RESULT');
             if (isFinalResponse && msg) {

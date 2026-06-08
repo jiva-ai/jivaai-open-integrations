@@ -103,6 +103,7 @@ Without `--debug`, the UI keeps high-signal request/response/error lines and hid
    - Content streams in as it's generated
    - Final results are displayed when complete
    - Errors are shown in red
+   - `USER_INPUT_DETAIL` screening payload events are consumed from the stream but hidden from the chat UI because their `message` payload is structured JSON rather than user-facing text
 
 ## Architecture
 

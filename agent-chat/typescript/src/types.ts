@@ -202,6 +202,7 @@ export type SocketMessageType =
   | 'FINAL_RESULT'
   | 'ARTIFACT_CREATED'
   | 'USER_INPUT_REQUIRED'
+  | 'USER_INPUT_DETAIL'
   | 'CONFIRMATION_REQUIRED'
   | 'PROGRESS_UPDATE'
   | 'TOKEN_USAGE'
@@ -233,7 +234,7 @@ export interface SocketMessage {
   workflowId: string;
   /** Session ID */
   sessionId: string;
-  /** Text message to show to the user */
+  /** Message payload. Usually text, but some message types carry JSON detail payloads. */
   message: string;
   /** Array of message types */
   types: SocketMessageType[];
