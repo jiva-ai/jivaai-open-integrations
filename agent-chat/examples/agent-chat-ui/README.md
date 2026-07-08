@@ -105,6 +105,31 @@ Without `--debug`, the UI keeps high-signal request/response/error lines and hid
    - Errors are shown in red
    - `USER_INPUT_DETAIL` screening payload events are consumed from the stream but hidden from the chat UI because their `message` payload is structured JSON rather than user-facing text
 
+### Socket connectivity test (`SOCKET_TEST`)
+
+The chat UI sends normal `CHAT_REQUEST` turns. To run the server’s **socket connectivity test** (simulated ~10s agent run, no real workflows), use **`mode: "SOCKET_TEST"`** via curl or your own script while the UI (or SDK) keeps the SSE stream open for the same `sessionId`:
+
+1. Start this app (`npm start`) and open it in the browser so settings and the stream are active, **or** open the stream yourself with the SDK/`curl` (see [Agent Chat README](../../README.md#socket-connectivity-test)).
+2. Use a dedicated test `sessionId` (the UI generates one per page load; copy it from the debug log if `--debug` is enabled, or pick your own UUID for curl-only tests).
+3. Invoke the chat workflow with a single row:
+
+```bash
+curl -X POST "https://api.jiva.ai/public-api/workflow/{chatWorkflowId}/0/invoke" \
+  -H "Content-Type: application/json" \
+  -H "api-key: YOUR_CHAT_API_KEY" \
+  -d '{
+    "data": {
+      "default": [{
+        "sessionId": "YOUR_SESSION_ID",
+        "message": "Socket connectivity test",
+        "mode": "SOCKET_TEST"
+      }]
+    }
+  }'
+```
+
+Expect `json.default.state: "RUNNING"` and `mode: "CHAT_RESPONSE"`. On the open SSE stream, verify the simulated `types` sequence (`AGENT_THINKING`, `EXECUTION_CALL_STARTED`, … `AGENT_COMPLETED`) over ~10 seconds. Optionally poll with `POLL_REQUEST` until `state: "OK"`. This mode is for **diagnostics only**, not end-user chat.
+
 ## Architecture
 
 - **Backend** (`server.js`): Express server that proxies API requests to keep API keys secure

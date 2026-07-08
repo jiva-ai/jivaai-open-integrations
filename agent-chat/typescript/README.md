@@ -348,6 +348,62 @@ const response = await client.initiateConversation([
 - The SDK JSON-stringifies the array into a single `resourceHints` column in the outgoing dataset payload; you do **not** need to stringify it yourself.
 - Hints only affect the server-side screening step. If the agent's workflow does not require the hinted resource, the hint is ignored.
 
+### Socket connectivity test
+
+Use **`mode: 'SOCKET_TEST'`** to verify SSE delivery without running real agent workflows. This is **for integration/diagnostics only** — not for end-user conversations. The invoke response still uses `mode: 'CHAT_RESPONSE'` and `state: 'RUNNING'` while the simulated run is in progress.
+
+**Procedure:** open the stream first → invoke with `SOCKET_TEST` → observe SSE `types` → optionally poll until `OK`.
+
+```typescript
+import { randomUUID } from 'crypto'; // or crypto.randomUUID() in modern runtimes
+
+const sessionId = randomUUID();
+const receivedTypes: string[] = [];
+
+// 1. Open the SSE stream FIRST (critical — events are easy to miss if you invoke before subscribing)
+const es = client.subscribeToSocket(sessionId, {
+  onMessage: (message) => {
+    for (const type of message.types) {
+      receivedTypes.push(type);
+      console.log(`[${type}]`, message.message);
+    }
+    if (message.types.includes('AGENT_COMPLETED')) {
+      console.log('Simulated run finished on stream');
+    }
+  },
+});
+
+// 2. Invoke with SOCKET_TEST (single row only)
+const response = await client.initiateConversation({
+  sessionId,
+  message: 'Socket connectivity test',
+  mode: 'SOCKET_TEST',
+});
+
+const data = response.data?.json.default;
+console.assert(data?.state === 'RUNNING', 'Expected RUNNING');
+console.assert(data?.mode === 'CHAT_RESPONSE', 'Response mode stays CHAT_RESPONSE');
+const pollId = data?.id;
+
+// 3. Wait ~10s on the stream for the full types sequence, then optionally poll once for executions
+await new Promise((resolve) => setTimeout(resolve, 12_000));
+
+if (pollId) {
+  const pollResponse = await client.poll({
+    sessionId,
+    id: pollId,
+    mode: 'POLL_REQUEST',
+  });
+  if (pollResponse.data?.json.default.state === 'OK') {
+    console.log('Final message:', pollResponse.data.json.default.executions);
+  }
+}
+
+es.close();
+```
+
+On the stream you should see (in order): `EXECUTION_CALL_STARTED`, `AGENT_STARTED`, `REASONING`, `PLAN_CREATED`, … through `EXECUTION_FOLLOWUP` and `AGENT_COMPLETED`, plus an early `AGENT_THINKING` with *"Socket connectivity test started"*. See the full list in [`src/types.ts`](./src/types.ts) (`SocketMessageType`) and the step-by-step guide in the [Agent Chat README](../README.md#socket-connectivity-test).
+
 ### Handling Screen Responses
 
 Sometimes the agent requires additional assets (like files) to complete a request. When this happens, the response will have `mode: 'SCREEN_RESPONSE'` and include a `screens` array.
@@ -537,6 +593,7 @@ The socket can send various message types. Here are some common ones:
 - **CONTENT_COMPLETE** - Full text content block
 - **EXECUTION_CALL_STARTED** - Agent is invoking a pipeline
 - **EXECUTION_CALL_RESULT** - Result from an execution
+- **EXECUTION_FOLLOWUP** - Follow-up suggestion after an execution
 - **FINAL_RESULT** - Final output from the pipeline
 - **USER_INPUT_REQUIRED** - Agent needs additional user input before it can continue
 - **USER_INPUT_DETAIL** - Structured screening payload as JSON; useful for application logic/debugging, but not intended to be displayed as user-facing chat text

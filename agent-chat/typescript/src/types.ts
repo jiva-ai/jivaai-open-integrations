@@ -99,8 +99,17 @@ export interface ResourceHint {
 
 /**
  * Conversation mode types
+ *
+ * `SOCKET_TEST` is **request-only**: invoke the chat workflow with this mode to run a
+ * simulated ~10s agent turn that emits socket (SSE) events without executing real workflows.
+ * The HTTP response still uses `mode: "CHAT_RESPONSE"` (same as a normal chat turn).
  */
-export type ConversationMode = 'CHAT_REQUEST' | 'CHAT_RESPONSE' | 'SCREEN_RESPONSE' | 'POLL_REQUEST';
+export type ConversationMode =
+  | 'CHAT_REQUEST'
+  | 'CHAT_RESPONSE'
+  | 'SCREEN_RESPONSE'
+  | 'POLL_REQUEST'
+  | 'SOCKET_TEST';
 
 /**
  * Options for a conversation message (e.g. request Ojas cost calculation)
@@ -118,8 +127,11 @@ export interface ConversationMessage {
   sessionId: string;
   /** Natural language message to send to the agent */
   message: string;
-  /** Mode of the conversation (CHAT_REQUEST or CHAT_RESPONSE for context) */
-  mode: 'CHAT_REQUEST' | 'CHAT_RESPONSE';
+  /**
+   * Mode of the conversation (`CHAT_REQUEST` or `CHAT_RESPONSE` for context arrays).
+   * `SOCKET_TEST` is request-only and must not appear in multi-turn context batches.
+   */
+  mode: 'CHAT_REQUEST' | 'CHAT_RESPONSE' | 'SOCKET_TEST';
   /** Optional: nodeId for satisfying screen responses */
   nodeId?: string;
   /** Optional: field for satisfying screen responses */
@@ -191,6 +203,7 @@ export type SocketMessageType =
   | 'AGENT_FAILED'
   | 'EXECUTION_CALL_STARTED'
   | 'EXECUTION_CALL_RESULT'
+  | 'EXECUTION_FOLLOWUP'
   | 'EXECUTION_CALL_FAILED'
   | 'CONTENT_DELTA'
   | 'CONTENT_COMPLETE'

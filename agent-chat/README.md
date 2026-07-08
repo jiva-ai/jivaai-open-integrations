@@ -166,7 +166,7 @@ Each element of `data.default` is an object with at least:
 |--------|----------|-------------|
 | `sessionId` | Yes | Stable id for the conversation thread (your user/thread key) |
 | `message` | Yes | Text content of the turn |
-| `mode` | Yes | `CHAT_REQUEST`, `CHAT_RESPONSE`, or `SCREEN_RESPONSE` (see modes below) |
+| `mode` | Yes | `CHAT_REQUEST`, `CHAT_RESPONSE`, `SCREEN_RESPONSE`, or `SOCKET_TEST` (see modes below) |
 | `nodeId` | For screen follow-up | From `screens[].nodeId` when satisfying a screen |
 | `field` | For screen follow-up | From `screens[].field` |
 | `assetId` | For screen follow-up | From upload cache `strings.default` after uploading the requested asset |
@@ -219,6 +219,7 @@ The field is optional. When absent or empty, the request behaves as before — n
 | `CHAT_REQUEST` | User (or your app) sends a new instruction or reply |
 | `CHAT_RESPONSE` | Agent’s prior message in **history** when you send several rows in one invoke |
 | `SCREEN_RESPONSE` | Your reply when the last response was `SCREEN_RESPONSE` and you are supplying asset references (`nodeId`, `field`, `assetId`) |
+| `SOCKET_TEST` | **Integration/diagnostics only** — verify real-time socket (SSE) delivery without running real agent workflows (see [Socket connectivity test](#socket-connectivity-test)) |
 
 Do not use `POLL_REQUEST` in the same payload shape as a normal chat batch; polling is a separate use (below).
 
@@ -381,6 +382,58 @@ The authoritative list of `types` values used by the platform should be taken fr
 2. If you need live updates, **start the stream for that `sessionId`** before or when you might get `RUNNING`.  
 3. Interpret SSE `types` to render streaming UI; close the stream when the agent signals completion or error.  
 4. Use the final **`invoke`** response (or last poll, if you must) for structured `executions` and `screens`.
+
+---
+
+## Socket connectivity test
+
+Use **`mode: "SOCKET_TEST"`** to verify that your client can receive real-time socket (SSE) events end-to-end **without** executing real agentic workflows. This mode is for **integration testing and diagnostics only** — do not expose it to end users as a conversation feature.
+
+When the latest row in `data.default` uses `SOCKET_TEST`:
+
+1. The HTTP invoke returns immediately with `json.default.state: "RUNNING"`, `mode: "CHAT_RESPONSE"`, and `id` set for optional polling — the same async pattern as a normal long-running chat turn.
+2. No real workflows run. The server performs a **~10 second simulated agent run** and emits socket messages over `POST /workflow-chat/{workflowId}/{sessionId}` (SSE).
+3. When complete, polling (or a later poll) shows `state: "OK"` with a message like *"Socket connectivity test completed successfully. No real workflows were executed."* and two dummy executions referencing workflow IDs `socket-test-workflow-step-1` and `socket-test-workflow-step-2`.
+
+### Recommended client test procedure
+
+1. **Choose or generate a `sessionId`** for an isolated test thread (for example a fresh UUID).
+2. **Open the SSE stream first** — this is critical so you do not miss early events:
+   ```bash
+   curl -N -X POST \
+     "https://api.jiva.ai/public-api/workflow-chat/{workflowId}/{sessionId}" \
+     -H "Content-Type: application/json" \
+     -H "api-key: YOUR_API_KEY" \
+     -H "Accept: text/event-stream" \
+     -d '{}'
+   ```
+3. **Invoke the chat workflow** with a single row:
+   ```json
+   {
+     "data": {
+       "default": [
+         {
+           "sessionId": "<your-session-id>",
+           "message": "Socket connectivity test",
+           "mode": "SOCKET_TEST"
+         }
+       ]
+     }
+   }
+   ```
+   Assert the invoke response has `state: "RUNNING"`, `mode: "CHAT_RESPONSE"`, and capture `id` for optional polling.
+4. **On the stream**, verify the expected `types` arrive in order over ~10 seconds. An initial **`AGENT_THINKING`** message is sent: *"Socket connectivity test started — simulated agent run (no real workflows)."* Several events include `[TEST]` or `"Socket"` in the message text.
+5. **Optionally poll** with `POLL_REQUEST` until `state` is `OK`, or wait for **`AGENT_COMPLETED`** on the stream and poll once for structured `executions`.
+
+**Streaming remains the recommended primary path** for `SOCKET_TEST`; polling is a supported fallback when you need the final structured payload.
+
+### Expected SSE `types` sequence
+
+During the simulated run, socket payloads use `types` in this order (authoritative enum: [TypeScript `SocketMessageType`](./typescript/src/types.ts)):
+
+`EXECUTION_CALL_STARTED`, `AGENT_STARTED`, `REASONING`, `PLAN_CREATED`, `REASONING`, `REASONING`, `STEP_STARTED`, `STEP_COMPLETED`, `REASONING`, `REASONING`, `REASONING`, `STEP_STARTED`, `STEP_COMPLETED`, `REASONING`, `EXECUTION_CALL_RESULT`, `EXECUTION_FOLLOWUP`, `AGENT_COMPLETED`
+
+(Plus the opening **`AGENT_THINKING`** event described above.)
 
 ---
 

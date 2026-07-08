@@ -394,6 +394,49 @@ describe('JivaApiClient', () => {
       expect(onError).toHaveBeenCalled();
     });
 
+    it('should accept SOCKET_TEST mode for single-message invoke', async () => {
+      (global.fetch as jest.Mock).mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          ...mockConversationResponse,
+          json: {
+            default: {
+              ...mockConversationResponse.json.default,
+              state: 'OK',
+              mode: 'CHAT_RESPONSE',
+              message: 'Socket connectivity test completed successfully. No real workflows were executed.',
+            },
+          },
+        }),
+      });
+
+      const client = new JivaApiClient(mockConfig);
+      const response = await client.initiateConversation({
+        sessionId: 'socket-test-session',
+        message: 'Socket connectivity test',
+        mode: 'SOCKET_TEST',
+      });
+
+      expect(response.error).toBeUndefined();
+      expect(global.fetch).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.objectContaining({
+          body: JSON.stringify({
+            data: {
+              default: [
+                {
+                  sessionId: 'socket-test-session',
+                  message: 'Socket connectivity test',
+                  mode: 'SOCKET_TEST',
+                },
+              ],
+            },
+          }),
+        })
+      );
+    });
+
     it('should send correct payload structure for CHAT_REQUEST', async () => {
       (global.fetch as jest.Mock).mockResolvedValueOnce({
         ok: true,

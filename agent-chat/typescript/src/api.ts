@@ -613,8 +613,8 @@ export class JivaApiClient {
       if (!request.message) {
         return { error: 'message is required' };
       }
-      if (!request.mode || !['CHAT_REQUEST', 'CHAT_RESPONSE', 'SCREEN_RESPONSE'].includes(request.mode)) {
-        return { error: 'mode must be CHAT_REQUEST, CHAT_RESPONSE, or SCREEN_RESPONSE' };
+      if (!request.mode || !['CHAT_REQUEST', 'CHAT_RESPONSE', 'SCREEN_RESPONSE', 'SOCKET_TEST'].includes(request.mode)) {
+        return { error: 'mode must be CHAT_REQUEST, CHAT_RESPONSE, SCREEN_RESPONSE, or SOCKET_TEST' };
       }
 
       sessionId = request.sessionId;
